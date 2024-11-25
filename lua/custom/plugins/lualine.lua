@@ -30,15 +30,30 @@ return {
                         }
                     },
                     sections = {
-                        lualine_a = {'mode'},
+                        -- tabline = {
+                        --     lualine_a = {},
+                        --     lualine_b = {'branch'},
+                        --     lualine_c = {'filename'},
+                        --     lualine_x = {},
+                        --     lualine_y = {},
+                        --     lualine_z = {}
+                        -- },
+                        lualine_a = {'mode',
+                            -- {
+                            --     'tabs',
+                            --     mode = 2,
+                            --     path = 0
+                            -- }
+                    },
                         lualine_b = {
                             'branch',
                             'diff',
                             'diagnostics'
                         },
-                        lualine_c = {
-                            'filename'
-                        },
+                        lualine_c = {{
+                            'filename',
+                            path = 1
+                    }},
                         lualine_x = {
                             {
                                 function() 
@@ -56,7 +71,7 @@ return {
                         lualine_y = {},
                         lualine_z = {}
                     },
-                    tabline = {},
+                    -- tabline = {},
                     winbar = {},
                     inactive_winbar = {},
                     extensions = {}
