@@ -19,13 +19,23 @@ return {
         J = { data_location = '~/textfiles/tasks/junipertasks/', taskrc_location = '~/rcfiles/.junipertaskrc' },
         T = { data_location = '~/textfiles/tasks/tracktasks/', taskrc_location = '~/rcfiles/.tracktaskrc' },
       }
+      vim.g.taskwiki_sort_orders = {
+        T = 'project+,due-',
+        P = 'priority+',
+      }
     end,
   },
   {
     'wakatime/vim-wakatime',
   },
   {
-    'benmills/vimux'         -- vim plugin to interact with tmux
+    'NvChad/nvim-colorizer.lua', -- The fastest Neovim colorizer
+    event = 'BufReadPre',
+    opts = { -- set to setup table
+    },
+  },
+  {
+    'benmills/vimux', -- vim plugin to interact with tmux
   },
   {
     'chrisbra/NrrwRgn',
