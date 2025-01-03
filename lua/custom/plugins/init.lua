@@ -29,6 +29,12 @@ return {
     'wakatime/vim-wakatime',
   },
   {
+    'junegunn/vim-easy-align', --A simple, easy-to-use Vim alignment plugin.
+  },
+  {
+    'dhruvasagar/vim-table-mode', -- VIM Table Mode for instant table creation.
+  },
+  {
     'NvChad/nvim-colorizer.lua', -- The fastest Neovim colorizer
     event = 'BufReadPre',
     opts = { -- set to setup table
@@ -42,6 +48,24 @@ return {
   },
   {
     'Lokaltog/vim-easymotion',
+  },
+  {
+    'chentoast/marks.nvim', -- A better user experience for viewing and interacting with Vim marks.
+    event = 'VeryLazy',
+    opts = {
+      bookmark_0 = {
+        sign = '⚑',
+        virt_text = 'hello world',
+        -- explicitly prompt for a virtual line annotation when setting a bookmark from this group.
+        -- defaults to false.
+        annotate = true,
+      },
+      mappings = {
+        -- toogle_bookmark0 = 'mt0',
+        -- To go to next bookmark
+        next_bookmark0 = 'mn0',
+      },
+    },
   },
   {
     'zenbro/mirror.vim', -- Efficient way to edit remote files on multiple environments with Vim.

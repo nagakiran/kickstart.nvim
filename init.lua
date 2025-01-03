@@ -84,14 +84,17 @@ I hope you enjoy your Neovim journey,
 P.S. You can delete this when you're done too. It's your config now! :)
 --]]
 
+-- custom shell
+-- vim.o.shell = '/opt/homebrew/bin/bash --norc'
+
 -- Set <space> as the leader key
 -- See `:help mapleader`
 --  NOTE: Must happen before plugins are loaded (otherwise wrong leader will be used)
 vim.g.mapleader = ';'
 vim.g.maplocalleader = ';'
 
--- Set the background to light as using solarized8 light
-vim.g.background = 'light'
+-- Set the background to light as using solarized8 light  (vim.g didn't work??)
+vim.opt.background = 'light'
 
 -- Set to true if you have a Nerd Font installed and selected in the terminal
 vim.g.have_nerd_font = true
@@ -101,6 +104,8 @@ vim.g.have_nerd_font = true
 -- NOTE: You can change these options as you wish!
 --  For more options, you can see `:help option-list`
 
+-- To auto-reload file when changed from elsewhere
+vim.opt.autoread = true
 -- Make line numbers default
 vim.opt.number = true
 -- You can also add relative line numbers, to help with jumping.
@@ -172,6 +177,7 @@ vim.keymap.set('n', '<Esc>', '<cmd>nohlsearch<CR>')
 
 -- Diagnostic keymaps
 vim.keymap.set('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagnostic [Q]uickfix list' })
+-- Will be useful to look at diagnostic messages that spawn across a line [also for copying as virtual text can't be copied]
 vim.keymap.set('n', '<leader>df', vim.diagnostic.open_float, { desc = 'Open diagnostic [F]loat' })
 
 -- Exit terminal mode in the builtin terminal with a shortcut that is a bit easier
@@ -477,6 +483,16 @@ require('lazy').setup({
       },
     },
   },
+  -- {
+  --   'nvim-java/nvim-java',
+  --   config = function()
+  --     require('java').setup {
+  --       -- java_path = vim.fn.exepath 'java', -- Explicitly set Java path
+  --       java_path = '/usr/bin/java', -- Explicitly set Java path
+  --     }
+  --     require('lspconfig').jdtls.setup {}
+  --   end,
+  -- },
   { 'Bilal2453/luvit-meta', lazy = true },
   {
     -- Main LSP Configuration
@@ -573,6 +589,7 @@ require('lazy').setup({
           -- WARN: This is not Goto Definition, this is Goto Declaration.
           --  For example, in C this would take you to the header.
           map('gD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
+          -- will be useful to look at definition in a preview [good thing is hover goes away only on moving mouse and not like pressing Esc]
           map('<leader>ph', vim.lsp.buf.hover, 'LS[P] [H]over')
 
           -- The following two autocommands are used to highlight references of the
@@ -653,8 +670,18 @@ require('lazy').setup({
         --    https://github.com/pmizio/typescript-tools.nvim
         --
         -- But for many setups, the LSP (`ts_ls`) will work just fine
-        ts_ls = {},
+        ts_ls = {
+          init_options = {
+            -- Need to use when specific tsconfig to be chosen like atom/stockscreener
+            -- tsconfig = vim.fn.getcwd() .. '/tsconfig.json',
+          },
+        },
         --
+        jdtls = {
+          root_dir = function(fname)
+            return require('lspconfig.util').root_pattern '.classpath'(fname) or require('lspconfig.util').find_git_ancestor(fname) or vim.loop.os_homedir()
+          end,
+        },
 
         lua_ls = {
           -- cmd = {...},
@@ -789,6 +816,7 @@ require('lazy').setup({
       --  into multiple repos for maintenance purposes.
       'hrsh7th/cmp-nvim-lsp',
       'hrsh7th/cmp-path',
+      'hrsh7th/cmp-buffer',
     },
     config = function()
       -- See `:help cmp`
@@ -802,7 +830,7 @@ require('lazy').setup({
             luasnip.lsp_expand(args.body)
           end,
         },
-        completion = { completeopt = 'menu,menuone,noinsert' },
+        completion = { completeopt = 'menu,menuone,noinsert', autocomplete = { cmp.TriggerEvent.InsertEnter, cmp.TriggerEvent.TextChanged } },
 
         -- For an understanding of why these mappings were
         -- chosen, you will need to read `:help ins-completion`
@@ -825,7 +853,7 @@ require('lazy').setup({
 
           -- If you prefer more traditional completion keymaps,
           -- you can uncomment the following lines
-          --['<CR>'] = cmp.mapping.confirm { select = true },
+          ['<CR>'] = cmp.mapping.confirm { select = true },
           --['<Tab>'] = cmp.mapping.select_next_item(),
           --['<S-Tab>'] = cmp.mapping.select_prev_item(),
 
@@ -847,10 +875,11 @@ require('lazy').setup({
               luasnip.expand_or_jump()
             end
           end, { 'i', 's' }),
-          ['<C-h>'] = cmp.mapping(function()
+          ['<C-h>'] = cmp.mapping(function(fallback)
             if luasnip.locally_jumpable(-1) then
               luasnip.jump(-1)
             end
+            fallback() -- Use default <C-h> behavior (usually backspace)
           end, { 'i', 's' }),
 
           -- For more advanced Luasnip keymaps (e.g. selecting choice nodes, expansion) see:
@@ -865,6 +894,12 @@ require('lazy').setup({
           { name = 'nvim_lsp' },
           { name = 'luasnip' },
           { name = 'path' },
+          -- To search across all buffers
+          { name = 'buffer', option = {
+            get_bufnrs = function()
+              return vim.api.nvim_list_bufs()
+            end,
+          } },
         },
       }
     end,
@@ -1011,6 +1046,7 @@ require('lazy').setup({
 
 vim.cmd [[
   autocmd BufRead,BufNewFile ~/textfiles/journals/*.txt set filetype=jrnl.txtfmt
+  au BufNewFile,BufRead *.tjp,*.tji               setf tjp
   ]]
 -- Relative path not working and need to be checked
 vim.cmd 'source ~/.config/nvim/vim_fns.vim'
@@ -1023,6 +1059,20 @@ vim.api.nvim_set_keymap('v', 'ga', '<cmd>CodeCompanionChat Add<cr>', { noremap =
 
 -- Expand 'cc' into 'CodeCompanion' in the command line
 vim.cmd [[cab cc CodeCompanion]]
+
+-- This is working fine when tab containing the file is not in focus and switch to that tab, it's refreshing?
+-- vim.api.nvim_create_autocmd({ 'FocusGained', 'BufEnter' }, {
+-- will check for file changes whenever the cursor is idle (i.e., not moving) for a short period.
+vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI' }, {
+  pattern = '*',
+  callback = function()
+    -- check added to address error that checktime is not valid in command-line window
+    if vim.api.nvim_get_mode().mode == 'n' and vim.fn.getcmdwintype() == '' then
+      vim.cmd 'checktime'
+    end
+  end,
+  -- command = 'checktime',
+})
 
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et
