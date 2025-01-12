@@ -359,6 +359,7 @@ require('lazy').setup({
     branch = '0.1.x',
     dependencies = {
       'nvim-lua/plenary.nvim',
+      'debugloop/telescope-undo.nvim',
       { -- If encountering errors, see telescope-fzf-native README for installation instructions
         'nvim-telescope/telescope-fzf-native.nvim',
 
@@ -397,6 +398,10 @@ require('lazy').setup({
       -- Telescope picker. This is really useful to discover what Telescope can
       -- do as well as how to actually do it!
 
+      local actions = require 'telescope.actions'
+      local action_state = require 'telescope.actions.state'
+      local undo_actions = require 'telescope-undo.actions'
+
       -- [[ Configure Telescope ]]
       -- See `:help telescope` and `:help telescope.setup()`
       require('telescope').setup {
@@ -417,8 +422,27 @@ require('lazy').setup({
             -- layout_strategy = 'vertical',
             fname_width = 80,
           },
+          git_bcommits = {
+            -- To show date also in bcommits
+            git_command = { 'git', 'log', '--pretty=%h %ad %an %s', '--abbrev-commit', '--date=short' },
+          },
+          git_commits = {
+            -- To show date/author name also in bcommits
+            git_command = { 'git', 'log', '--pretty=%h %ad %an %s', '--abbrev-commit', '--date=short' },
+          },
         },
         extensions = {
+          undo = {
+            side_by_side = true,
+            layout_strategy = 'vertical',
+            layout_config = {
+              preview_height = 0.8,
+            },
+            saved_only = true,
+            mappings = {
+              i = {},
+            },
+          },
           ['ui-select'] = {
             require('telescope.themes').get_dropdown(),
           },
@@ -428,6 +452,7 @@ require('lazy').setup({
       -- Enable Telescope extensions if they are installed
       pcall(require('telescope').load_extension, 'fzf')
       pcall(require('telescope').load_extension, 'ui-select')
+      pcall(require('telescope').load_extension, 'undo')
 
       -- See `:help telescope.builtin`
       local builtin = require 'telescope.builtin'
@@ -442,6 +467,9 @@ require('lazy').setup({
       vim.keymap.set('n', '<leader>sr', builtin.resume, { desc = '[S]earch [R]esume' })
       vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
       vim.keymap.set('n', '<leader>sj', builtin.jumplist, { desc = '[J]ump List entries' })
+      vim.keymap.set('n', '<leader>sb', builtin.git_bcommits, { desc = '[B]uffer Git Commits' })
+      vim.keymap.set('n', '<leader>sc', builtin.git_commits, { desc = 'Git [C]ommits' })
+      vim.keymap.set('n', '<leader>su', '<cmd>Telescope undo<cr>')
       -- As using it for easymotion
       -- vim.keymap.set('n', '<leader><leader>', builtin.buffers, { desc = '[ ] Find existing buffers' })
 
@@ -663,6 +691,7 @@ require('lazy').setup({
         -- clangd = {},
         gopls = {},
         pyright = {},
+        eslint = {},
         -- rust_analyzer = {},
         -- ... etc. See `:help lspconfig-all` for a list of all the pre-configured LSPs
         --
@@ -830,6 +859,7 @@ require('lazy').setup({
             luasnip.lsp_expand(args.body)
           end,
         },
+        -- To trigger autocompletion as we type instead of invoking any additional key for trigger
         completion = { completeopt = 'menu,menuone,noinsert', autocomplete = { cmp.TriggerEvent.InsertEnter, cmp.TriggerEvent.TextChanged } },
 
         -- For an understanding of why these mappings were
@@ -851,8 +881,9 @@ require('lazy').setup({
           --  This will expand snippets if the LSP sent a snippet.
           ['<C-y>'] = cmp.mapping.confirm { select = true },
 
-          -- If you prefer more traditional completion keymaps,
+          -- If you prefer more traditional completion keymaps, (on "Enter", it selects the current completion even the first one also)
           -- you can uncomment the following lines
+          --
           ['<CR>'] = cmp.mapping.confirm { select = true },
           --['<Tab>'] = cmp.mapping.select_next_item(),
           --['<S-Tab>'] = cmp.mapping.select_prev_item(),
@@ -1073,6 +1104,12 @@ vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI' }, {
   end,
   -- command = 'checktime',
 })
+
+-- https://github.com/JoosepAlviste/nvim-ts-context-commentstring/wiki/Integrations
+local get_option = vim.filetype.get_option
+vim.filetype.get_option = function(filetype, option)
+  return option == 'commentstring' and require('ts_context_commentstring.internal').calculate_commentstring() or get_option(filetype, option)
+end
 
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et

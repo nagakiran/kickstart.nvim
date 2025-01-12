@@ -29,6 +29,61 @@ return {
     'wakatime/vim-wakatime',
   },
   {
+    'kristijanhusak/vim-dadbod-ui',
+    dependencies = {
+      { 'tpope/vim-dadbod', lazy = true },
+      { 'kristijanhusak/vim-dadbod-completion', ft = { 'sql', 'mysql', 'plsql' }, lazy = true }, -- Optional
+    },
+    cmd = {
+      'DBUI',
+      'DBUIToggle',
+      'DBUIAddConnection',
+      'DBUIFindBuffer',
+    },
+    init = function()
+      -- Your DBUI configuration
+      vim.g.db_ui_use_nerd_fonts = 1
+    end,
+  },
+  {
+    -- Had to do "yarn install" from ~/.local/share/nvim/lazy/markdown-preview.nvim/app
+    'iamcco/markdown-preview.nvim',
+    cmd = { 'MarkdownPreviewToggle', 'MarkdownPreview', 'MarkdownPreviewStop' },
+    ft = { 'markdown' },
+    build = function()
+      vim.fn['mkdp#util#install']()
+    end,
+  },
+  {
+    'lambdalisue/vim-suda', -- An alternative sudo.vim for Vim and Neovim, limited support sudo in Windows
+  },
+  {
+    -- Neovim treesitter plugin for setting the commentstring based on the cursor location in a file.
+    'JoosepAlviste/nvim-ts-context-commentstring',
+    opts = {
+      enable_autocmd = false,
+    },
+  },
+  {
+    'HakonHarnes/img-clip.nvim',
+    event = 'VeryLazy',
+    opts = {
+      -- add options here
+      -- or leave it empty to use the default settings
+      default = {
+        file_name = function()
+          local desctipion = vim.fn.input 'Description: '
+          return desctipion:lower():gsub('[^a-z0-9]', '_')
+        end,
+        prompt_for_file_name = false,
+      },
+    },
+    keys = {
+      -- suggested keymap
+      { '<leader>p', '<cmd>PasteImage<cr>', desc = 'Paste image from system clipboard' },
+    },
+  },
+  {
     'junegunn/vim-easy-align', --A simple, easy-to-use Vim alignment plugin.
   },
   {

@@ -44,8 +44,14 @@ set shiftwidth=2  " For indentation
 set nohlsearch
 
 " Open in sc-im when we hover a filepath in vim
-map gS :call VimuxRunCommand('sc-im '.<cWORD>)<CR>
+map gS :call VimuxRunCommand('sc-im '. expand('<cWORD>'))<CR>
 
 " Mappings for marks.nvim
 nmap mt0 <Plug>(Marks-toggle-bookmark0)
 
+" nnoremap gO :!open <cfile><CR>
+" https://superuser.com/questions/386646/xdg-open-url-doesnt-open-the-website-in-my-default-browser/407675
+" nnoremap gO :!xdg-open <cfile> & <CR>
+nnoremap <expr> gO has('mac') ? ':!open <cfile><CR>' :  ':!xdg-open <cfile> & <CR>'
+
+autocmd FileType sql,mysql,plsql lua require('cmp').setup.buffer({ sources = {{ name = 'vim-dadbod-completion' }} })
