@@ -1076,7 +1076,7 @@ require('lazy').setup({
 })
 
 vim.cmd [[
-  autocmd BufRead,BufNewFile ~/textfiles/journals/*.txt set filetype=jrnl.txtfmt
+  autocmd BufRead,BufNewFile ~/textfiles/journals/*.txt set filetype=jrnl.txtfmt.markdown
   au BufNewFile,BufRead *.tjp,*.tji               setf tjp
   ]]
 -- Relative path not working and need to be checked
