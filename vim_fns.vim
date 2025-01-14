@@ -55,3 +55,4 @@ nmap mt0 <Plug>(Marks-toggle-bookmark0)
 nnoremap <expr> gO has('mac') ? ':!open <cfile><CR>' :  ':!xdg-open <cfile> & <CR>'
 
 autocmd FileType sql,mysql,plsql lua require('cmp').setup.buffer({ sources = {{ name = 'vim-dadbod-completion' }} })
+
