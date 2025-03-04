@@ -5,7 +5,47 @@ return {
     lazy = false,
     version = false, -- set this if you want to always pull the latest change
     opts = {
+      file_selector = {
+        provider = 'telescope',
+        provider_opts = {
+          find_command = { 'rg', '--files', '--hidden', '-g', '!.git' },
+        },
+      },
       -- add any opts here
+      mappings = {
+        --- @class AvanteConflictMappings
+        diff = {
+          ours = 'co',
+          theirs = 'ct',
+          all_theirs = 'ca',
+          both = 'cb',
+          cursor = 'cc',
+          next = ']x',
+          prev = '[x',
+        },
+        suggestion = {
+          accept = '<M-l>',
+          next = '<M-]>',
+          prev = '<M-[>',
+          dismiss = '<C-]>',
+        },
+        jump = {
+          next = ']]',
+          prev = '[[',
+        },
+        submit = {
+          normal = '<CR>',
+          insert = '<C-s>',
+        },
+        sidebar = {
+          apply_all = 'A',
+          apply_cursor = 'a',
+          switch_windows = '<Tab>',
+          reverse_switch_windows = '<S-Tab>',
+          remove_file = 'd',
+          add_file = '@',
+        },
+      },
     },
     -- if you want to build from source then do `make BUILD_FROM_SOURCE=true`
     build = 'make',
@@ -46,24 +86,33 @@ return {
     },
     -- other config options
     config = function()
-      local opts = { provider = "copilot" }
+      local opts = { provider = 'copilot' }
 
-      local openai_api_url = os.getenv("OPENAI_API_CHAT_COMPLETIONS")
+      local openai_api_url = os.getenv 'OPENAI_API_CHAT_COMPLETIONS'
       if openai_api_url then
-        opts.provider = "openai"
+        opts.provider = 'openai'
         opts.openai = {
           endpoint = openai_api_url,
-          model = "anthropic:claude-3-5-sonnet",
+          model = 'anthropic:claude-3-5-sonnet',
           timeout = 30000,
           temperature = 0,
           max_tokens = 4096,
-          ["local"] = false,
+          ['local'] = false,
         }
       end
 
-      require("avante").setup(opts)
+      -- require('avante').setup(opts)
+      -- Debugging: Print the opts table
+      -- print(vim.inspect(opts))
+
+      local avante = require 'avante'
+      if type(avante) ~= 'table' then
+        error 'Failed to load avante module'
+      end
+
+      avante.setup(opts)
     end,
---[=====[ 
+    --[=====[ 
     opts = {
       -- Your config here!
       ---@alias Provider "claude" | "openai" | "azure" | "gemini" | "cohere" | "copilot" | string
@@ -154,5 +203,5 @@ return {
       },
     },
 --]=====]
-  }
+  },
 }
