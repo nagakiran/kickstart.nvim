@@ -153,6 +153,10 @@ return {
     },
   },
   {
+    -- Make sure to set this up properly if you have lazy=true		[copied from avante dependencies]
+    'MeanderingProgrammer/render-markdown.nvim',
+  },
+  {
     'zenbro/mirror.vim', -- Efficient way to edit remote files on multiple environments with Vim.
   },
   {
@@ -164,7 +168,9 @@ return {
   {
     'airblade/vim-rooter', -- Changes Vim working directory to project root (identified by presence of known directory or file).
     config = function()
-      vim.g.rooter_patterns = { '.vim_rooter', 'setup.py', '.git' }
+      -- vim.g.rooter_patterns = { '.vim_rooter', 'setup.py', '.git' }
+      -- setting setup.py doesn't work in most cases especially when working with monorepos and better use .vim_rooter for exceptional cases
+      vim.g.rooter_patterns = { '.vim_rooter', '.git' }
       -- let g:rooter_patterns = ['.ctrlp','.git/']
 
       vim.g.rooter_cd_cmd = 'lcd' -- To change directory for the current window only (:lcd)
@@ -195,10 +201,10 @@ return {
       vim.g.txtfmtTokrange = '180S'
       -- Disabling it as it conflicts with right-shift and repeat opeator
       vim.g.txtfmtLeadingindent = 'none'
-      vim.api.nvim_create_autocmd({ 'BufRead', 'BufNewFile' }, {
-        pattern = '*.txt',
-        command = 'set filetype=txtfmt',
-      })
+      -- vim.api.nvim_create_autocmd({ 'BufRead', 'BufNewFile' }, {
+      --   pattern = '*.txt',
+      --   command = 'set filetype=txtfmt',
+      -- })
     end,
   },
 }

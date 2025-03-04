@@ -473,6 +473,16 @@ require('lazy').setup({
       -- As using it for easymotion
       -- vim.keymap.set('n', '<leader><leader>', builtin.buffers, { desc = '[ ] Find existing buffers' })
 
+      -- To search from git root directory instead of current directory as in atom monorepo changing the cwd to sub project
+      vim.keymap.set('n', '<leader>sG', function()
+        local git_dir = vim.fn.system(string.format('git -C %s rev-parse --show-toplevel', vim.fn.expand '%:p:h'))
+        git_dir = string.gsub(git_dir, '\n', '') -- remove newline character from git_dir
+        local opts = {
+          cwd = git_dir,
+        }
+        builtin.live_grep(opts)
+      end, { desc = '[S]earch by [G]rep' })
+
       -- Slightly advanced example of overriding default behavior and theme
       vim.keymap.set('n', '<leader>/', function()
         -- You can pass additional configuration to Telescope to change the theme, layout, etc.
@@ -1009,7 +1019,8 @@ require('lazy').setup({
     opts = {
       ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' },
       -- Autoinstall languages that are not installed
-      auto_install = true,
+      -- Disabling for now as it throws an error when parser is not available like starlark for .bazel files
+      auto_install = false,
       highlight = {
         enable = true,
         -- Some languages depend on vim's regex highlighting system (such as Ruby) for indent rules.
@@ -1077,6 +1088,7 @@ require('lazy').setup({
 
 vim.cmd [[
   autocmd BufRead,BufNewFile ~/textfiles/journals/*.txt set filetype=jrnl.txtfmt.markdown
+  autocmd BufRead,BufNewFile ~/textfiles/*.txt set filetype=txtfmt.markdown
   au BufNewFile,BufRead *.tjp,*.tji               setf tjp
   ]]
 -- Relative path not working and need to be checked
@@ -1110,6 +1122,9 @@ local get_option = vim.filetype.get_option
 vim.filetype.get_option = function(filetype, option)
   return option == 'commentstring' and require('ts_context_commentstring.internal').calculate_commentstring() or get_option(filetype, option)
 end
+
+-- Load Avante custom keymappings
+require 'avante_config'
 
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et

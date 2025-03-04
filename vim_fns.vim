@@ -56,3 +56,5 @@ nnoremap <expr> gO has('mac') ? ':!open <cfile><CR>' :  ':!xdg-open <cfile> & <C
 
 autocmd FileType sql,mysql,plsql lua require('cmp').setup.buffer({ sources = {{ name = 'vim-dadbod-completion' }} })
 
+" Map <leader>cc to write the visually selected paragraph to /tmp/out.txt and execute it with bash
+map <leader>cc vip:w !>/tmp/out.txt /bin/bash<CR><CR><CR>
