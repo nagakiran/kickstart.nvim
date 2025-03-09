@@ -40,6 +40,7 @@ local avante_complete_code = 'Complete the following codes written in ' .. vim.b
 local avante_add_docstring = 'Add docstring to the following codes'
 local avante_fix_bugs = 'Fix the bugs inside the following codes if any'
 local avante_add_tests = 'Implement tests for the following code'
+local avante_add_commit_message = 'Generate a concise git commit message from these changes'
 
 require('which-key').add {
   { '<leader>a', group = 'Avante' }, -- NOTE: add for avante.nvim
@@ -121,6 +122,13 @@ require('which-key').add {
         require('avante.api').ask { question = avante_add_tests }
       end,
       desc = 'Add Tests(ask)',
+    },
+    {
+      '<leader>at',
+      function()
+        require('avante.api').ask { question = avante_add_commit_message }
+      end,
+      desc = 'Add gi[t] Commit message(ask)',
     },
   },
 }
