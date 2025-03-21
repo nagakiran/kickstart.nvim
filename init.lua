@@ -1015,6 +1015,29 @@ require('lazy').setup({
     'nvim-treesitter/nvim-treesitter',
     build = ':TSUpdate',
     main = 'nvim-treesitter.configs', -- Sets main module to use for opts
+    dependencies = {
+      { 'nvim-treesitter/nvim-treesitter-textobjects' }, -- Syntax aware text-objects
+      {
+        'nvim-treesitter/nvim-treesitter-context', -- Show code context
+        opts = {
+          -- function prototype
+          enable = true, -- FIXME: true?
+          mode = 'topline',
+          line_numbers = false,
+          multiwindow = false, -- Enable multiwindow support.
+          max_lines = 5, -- How many lines the window should span. Values <= 0 mean no limit.
+          -- min_window_height = 0, -- Minimum editor window height to enable context. Values <= 0 mean no limit.
+          -- line_numbers = false,
+          multiline_threshold = 20, -- Maximum number of lines to show for a single context
+          -- trim_scope = 'outer', -- Which context lines to discard if `max_lines` is exceeded. Choices: 'inner', 'outer'
+          -- mode = 'topline',  -- Line used to calculate context. Choices: 'cursor', 'topline'
+          -- -- Separator between context and content. Should be a single character string, like '-'.
+          -- -- When separator is set, the context will only show up when there are at least 2 lines above cursorline.
+          -- separator = nil,
+          -- zindex = 20, -- The Z-index of the context window
+        },
+      },
+    },
     -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
     opts = {
       ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' },
@@ -1029,6 +1052,17 @@ require('lazy').setup({
         additional_vim_regex_highlighting = { 'ruby' },
       },
       indent = { enable = true, disable = { 'ruby' } },
+      textobjects = {
+        swap = {
+          enable = true,
+          swap_next = {
+            ['<leader>ta'] = '[t]reesitter @parameter.inner',
+          },
+          swap_previous = {
+            ['<leader>tA'] = '[t]reesitter @parameter.inner',
+          },
+        },
+      },
     },
     -- There are additional nvim-treesitter modules that you can use to interact
     -- with nvim-treesitter. You should go explore a few and see what interests you:

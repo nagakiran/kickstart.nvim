@@ -216,28 +216,49 @@ return {
     build = 'make tiktoken', -- Only on MacOS or Linux
     opts = {
       -- See Configuration section for options
+      -- To get file dialog selection, hit <S-Tab> after #file:
       mappings = {
         complete = {
           detail = 'Use @<Tab> or /<Tab> for options.',
           insert = '<S-Tab>',
         },
       },
-      file = {
-        input = function(callback)
-          local fzf = require 'fzf-lua'
-          local fzf_path = require 'fzf-lua.path'
-          fzf.files {
-            complete = function(selected, opts)
-              local file = fzf_path.entry_to_file(selected[1], opts, opts._uri)
-              if file.path == 'none' then
-                return
-              end
-              vim.defer_fn(function()
-                callback(file.path)
-              end, 100)
-            end,
-          }
-        end,
+      contexts = {
+        file = {
+          -- input = function(callback)
+          --   local telescope = require 'telescope.builtin'
+          --   local actions = require 'telescope.actions'
+          --   local action_state = require 'telescope.actions.state'
+          --   telescope.find_files {
+          --     attach_mappings = function(prompt_bufnr)
+          --       actions.select_default:replace(function()
+          --         actions.close(prompt_bufnr)
+          --         local selection = action_state.get_selected_entry()
+          --         callback(selection[1])
+          --       end)
+          --       return true
+          --     end,
+          --   }
+          -- end,
+          input = function(callback)
+            local fzf = require 'fzf-lua'
+            local fzf_path = require 'fzf-lua.path'
+            fzf.files {
+              -- fd_opts = '--type f --no-symlink',
+              -- selected entires from FZF search results. Typically, will be a list of strings where each string is a selected file path
+              complete = function(selected, opts)
+                -- entry_to_file is used to convert a selected entry from the FZF results into a file object
+                local file = fzf_path.entry_to_file(selected[1], opts, opts._uri)
+                if file.path == 'none' then
+                  return
+                end
+                vim.defer_fn(function()
+                  callback(file.path)
+                end, 100)
+              end,
+            }
+          end,
+        },
       },
     },
     keys = { { '<leader>av', '<cmd>CopilotChatToggle<cr>', desc = 'CopilotChatToggle' } },
