@@ -1157,6 +1157,9 @@ vim.filetype.get_option = function(filetype, option)
   return option == 'commentstring' and require('ts_context_commentstring.internal').calculate_commentstring() or get_option(filetype, option)
 end
 
+-- Set this locally when working with python virtual environment as setting it globally causing other python library errors like taskwiki some libraries not found
+-- vim.g.python3_host_prog = os.getenv 'HOME' .. '/.pyenv/versions/myenv/bin/python'
+
 -- Load Avante custom keymappings
 require 'avante_config'
 
