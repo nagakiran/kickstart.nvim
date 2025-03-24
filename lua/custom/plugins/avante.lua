@@ -86,20 +86,27 @@ return {
     },
     -- other config options
     config = function()
-      local opts = { provider = 'copilot' }
+      local opts = {
+        provider = 'copilot',
+        auto_suggestions_provider = 'copilot',
+        cursor_applying_provider = nil, -- The provider used in the applying phase of Cursor Planning Mode, defaults to nil, when nil uses Config.provider as the provider for the applying phase
+        copilot = {
+          model = 'claude-3.5-sonnet',
+        },
+      }
 
-      local openai_api_url = os.getenv 'OPENAI_API_CHAT_COMPLETIONS'
-      if openai_api_url then
-        opts.provider = 'openai'
-        opts.openai = {
-          endpoint = openai_api_url,
-          model = 'anthropic:claude-3-5-sonnet',
-          timeout = 30000,
-          temperature = 0,
-          max_tokens = 4096,
-          ['local'] = false,
-        }
-      end
+      -- local openai_api_url = os.getenv 'OPENAI_API_CHAT_COMPLETIONS'
+      -- if openai_api_url then
+      --   opts.provider = 'openai'
+      --   opts.openai = {
+      --     endpoint = openai_api_url,
+      --     model = 'anthropic:claude-3-5-sonnet',
+      --     timeout = 30000,
+      --     temperature = 0,
+      --     max_tokens = 4096,
+      --     ['local'] = false,
+      --   }
+      -- end
 
       -- require('avante').setup(opts)
       -- Debugging: Print the opts table
