@@ -208,9 +208,46 @@ return {
     end,
   },
   {
+    'zbirenbaum/copilot.lua',
+    cmd = 'Copilot',
+    event = 'InsertEnter',
+    config = function()
+      require('copilot').setup {
+        -- disabling suggestion/panel as using copilot-cmp with nvim-cmp
+        suggestion = {
+          enabled = true,
+          auto_trigger = true,
+          keymap = {
+            -- other keymaps
+            accept = false,
+            accept_word = '<M-w>',
+            accept_line = '<M-e>',
+          },
+        },
+        panel = {
+          enabled = false,
+        },
+      }
+      vim.keymap.set('i', '<Tab>', function()
+        if require('copilot.suggestion').is_visible() then
+          require('copilot.suggestion').accept()
+        else
+          vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<Tab>', true, false, true), 'n', false)
+        end
+      end, { desc = 'Super Tab' })
+    end,
+  },
+  {
+    'zbirenbaum/copilot-cmp',
+    config = function()
+      require('copilot_cmp').setup()
+    end,
+  },
+  {
     'CopilotC-Nvim/CopilotChat.nvim',
     dependencies = {
-      { 'github/copilot.vim' }, -- or zbirenbaum/copilot.lua
+      -- { 'github/copilot.vim' }, -- or zbirenbaum/copilot.lua
+      { 'zbirenbaum/copilot.lua' },
       { 'nvim-lua/plenary.nvim', branch = 'master' }, -- for curl, log and async functions
     },
     build = 'make tiktoken', -- Only on MacOS or Linux
