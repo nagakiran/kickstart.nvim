@@ -298,7 +298,10 @@ return {
         },
       },
     },
-    keys = { { '<leader>av', '<cmd>CopilotChatToggle<cr>', desc = 'CopilotChatToggle' } },
+    keys = {
+      { '<leader>av', '<cmd>CopilotChatToggle<cr>', desc = 'Co[p]ilotChatToggle' },
+      { '<leader>pr', '<cmd>CopilotChatReset<cr>', desc = 'Co[p]ilotChatReset' },
+    },
     -- See Commands section for default commands if you want to lazy load on them
   },
 }

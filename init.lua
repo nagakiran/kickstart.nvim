@@ -94,7 +94,9 @@ vim.g.mapleader = ';'
 vim.g.maplocalleader = ';'
 
 -- Set the background to light as using solarized8 light  (vim.g didn't work??)
-vim.opt.background = 'light'
+-- Not needed as switching to dracula theme in iTerm2
+-- vim.opt.background = 'light'
+vim.opt.background = 'dark'
 
 -- Set to true if you have a Nerd Font installed and selected in the terminal
 vim.g.have_nerd_font = true
@@ -965,11 +967,18 @@ require('lazy').setup({
   --     vim.cmd.hi 'Comment gui=none'
   --   end,
   -- },
+  --{
+  --  'lifepillar/vim-solarized8',
+  --  priority = 1000, -- Make sure to load this before all the other start plugins.
+  --  init = function()
+  --    vim.cmd.colorscheme 'solarized8'
+  --  end,
+  --},
   {
-    'lifepillar/vim-solarized8',
+    'dracula/vim',
     priority = 1000, -- Make sure to load this before all the other start plugins.
     init = function()
-      vim.cmd.colorscheme 'solarized8'
+      vim.cmd.colorscheme 'dracula'
     end,
   },
 
