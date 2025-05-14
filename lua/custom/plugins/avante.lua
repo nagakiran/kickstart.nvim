@@ -5,12 +5,12 @@ return {
     lazy = false,
     version = false, -- set this if you want to always pull the latest change
     opts = {
-      file_selector = {
-        provider = 'telescope',
-        provider_opts = {
-          find_command = { 'rg', '--files', '--hidden', '-g', '!.git' },
-        },
-      },
+      -- file_selector = {
+      --   provider = 'telescope',
+      --   provider_opts = {
+      --     find_command = { 'rg', '--files', '--hidden', '--glob', './*', '-g', '!.git' },
+      --   },
+      -- },
       -- add any opts here
       mappings = {
         --- @class AvanteConflictMappings
