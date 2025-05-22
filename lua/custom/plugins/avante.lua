@@ -4,49 +4,63 @@ return {
     event = 'VeryLazy',
     lazy = false,
     version = false, -- set this if you want to always pull the latest change
-    opts = {
-      -- file_selector = {
-      --   provider = 'telescope',
-      --   provider_opts = {
-      --     find_command = { 'rg', '--files', '--hidden', '--glob', './*', '-g', '!.git' },
-      --   },
-      -- },
-      -- add any opts here
-      mappings = {
-        --- @class AvanteConflictMappings
-        diff = {
-          ours = 'co',
-          theirs = 'ct',
-          all_theirs = 'ca',
-          both = 'cb',
-          cursor = 'cc',
-          next = ']x',
-          prev = '[x',
-        },
-        suggestion = {
-          accept = '<M-l>',
-          next = '<M-]>',
-          prev = '<M-[>',
-          dismiss = '<C-]>',
-        },
-        jump = {
-          next = ']]',
-          prev = '[[',
-        },
-        submit = {
-          normal = '<CR>',
-          insert = '<C-s>',
-        },
-        sidebar = {
-          apply_all = 'A',
-          apply_cursor = 'a',
-          switch_windows = '<Tab>',
-          reverse_switch_windows = '<S-Tab>',
-          remove_file = 'd',
-          add_file = '@',
-        },
-      },
-    },
+    -- Being overriden with config = function()
+    -- opts = {
+    --   -- file_selector = 'fzf',
+    --   file_selector = {
+    --     provider = 'telescope1',
+    --     provider_opts = {
+    --       find_command = function()
+    --         local root = vim.fn.getcwd()
+    --         -- Add debug print to verify this function is being called
+    --         vim.notify('Avante file selector called from: ' .. root, vim.log.levels.INFO)
+    --         return {
+    --           'rg',
+    --           '--files',
+    --           '--hidden',
+    --           '--glob',
+    --           '!.git',
+    --           root,
+    --         }
+    --       end,
+    --     },
+    --   },
+    --   -- add any opts here
+    --   mappings = {
+    --     --- @class AvanteConflictMappings
+    --     diff = {
+    --       ours = 'co',
+    --       theirs = 'ct',
+    --       all_theirs = 'ca',
+    --       both = 'cb',
+    --       cursor = 'cc',
+    --       next = ']x',
+    --       prev = '[x',
+    --     },
+    --     suggestion = {
+    --       accept = '<M-l>',
+    --       next = '<M-]>',
+    --       prev = '<M-[>',
+    --       dismiss = '<C-]>',
+    --     },
+    --     jump = {
+    --       next = ']]',
+    --       prev = '[[',
+    --     },
+    --     submit = {
+    --       normal = '<CR>',
+    --       insert = '<C-s>',
+    --     },
+    --     sidebar = {
+    --       apply_all = 'A',
+    --       apply_cursor = 'a',
+    --       switch_windows = '<Tab>',
+    --       reverse_switch_windows = '<S-Tab>',
+    --       remove_file = 'd',
+    --       add_file = '@',
+    --     },
+    --   },
+    -- },
     -- if you want to build from source then do `make BUILD_FROM_SOURCE=true`
     build = 'make',
     -- build = "powershell -ExecutionPolicy Bypass -File Build.ps1 -BuildFromSource false" -- for windows
@@ -92,6 +106,24 @@ return {
         cursor_applying_provider = nil, -- The provider used in the applying phase of Cursor Planning Mode, defaults to nil, when nil uses Config.provider as the provider for the applying phase
         copilot = {
           model = 'claude-3.5-sonnet',
+        },
+        file_selector = {
+          provider = 'telescope',
+          provider_opts = {
+            find_command = function()
+              local root = vim.fn.getcwd()
+              -- Add debug print to verify this function is being called
+              vim.notify('Avante file selector called from: ' .. root, vim.log.levels.ERROR)
+              return {
+                'rg',
+                '--files',
+                '--hidden',
+                '--glob',
+                '!.git',
+                root,
+              }
+            end,
+          },
         },
       }
 
