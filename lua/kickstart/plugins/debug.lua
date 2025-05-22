@@ -136,6 +136,61 @@ return {
     dap.listeners.before.event_terminated['dapui_config'] = dapui.close
     dap.listeners.before.event_exited['dapui_config'] = dapui.close
 
+    -- TypeScript/JavaScript Debugging Configuration
+    dap.adapters.node2 = {
+      type = 'executable',
+      command = 'node',
+      args = { os.getenv 'HOME' .. '/.local/share/nvim/mason/packages/node-debug2-adapter/out/src/nodeDebug.js' },
+    }
+
+    dap.adapters.node = {
+      type = 'executable',
+      command = 'node',
+      -- args = { os.getenv 'HOME' .. '/.local/share/nvim/mason/packages/js-debug-adapter/js-debug/src/dapDebugServer.js', '9229' },
+      -- args = { '/opt/nagki/apps/git/vscode-js-debug/src/dapDebugServer.ts', '9229' },
+      args = { '--max-old-space-size=4096', '-r', 'events', '/opt/nagki/apps/git/vscode-js-debug/dist/src/vsDebugServer.js', '9229' },
+    }
+
+    -- dap.configurations.typescript = {
+    --   {
+    --     type = 'node2',
+    --     request = 'launch',
+    --     name = 'Launch TypeScript File',
+    --     program = '${file}',
+    --     cwd = vim.fn.getcwd(),
+    --     runtimeArgs = { '--loader', 'ts-node/esm' },
+    --     sourceMaps = true,
+    --     protocol = 'inspector',
+    --     outFiles = { '${workspaceFolder}/dist/**/*.js' },
+    --   },
+    -- }
+
+    dap.configurations.typescript = {
+      {
+        type = 'node',
+        request = 'launch',
+        name = 'Launch TypeScript File',
+        program = '${file}',
+        cwd = vim.fn.getcwd(),
+        runtimeArgs = { '--loader', 'ts-node/esm' },
+        sourceMaps = true,
+        protocol = 'inspector',
+      },
+    }
+
+    dap.configurations.javascript = {
+      {
+        type = 'node2',
+        request = 'launch',
+        name = 'Launch JavaScript File',
+        program = '${file}',
+        cwd = vim.fn.getcwd(),
+        sourceMaps = true,
+        protocol = 'inspector',
+        outFiles = { '${workspaceFolder}/dist/**/*.js' },
+      },
+    }
+
     -- Install golang specific config
     require('dap-go').setup {
       delve = {
