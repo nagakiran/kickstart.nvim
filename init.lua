@@ -1057,6 +1057,12 @@ require('lazy').setup({
       auto_install = false,
       highlight = {
         enable = true,
+        -- As JSONSchemas are huge trying out disabling highlight to check if it improves performance (not needed now as can dynamically disable based on file size/line length)
+        -- disable = { 'json' },
+        disable = function(_, buf)
+          -- Check the 'large_buf' variable set on the buffer
+          return vim.b[buf].large_buf == true
+        end,
         -- Some languages depend on vim's regex highlighting system (such as Ruby) for indent rules.
         --  If you are experiencing weird indenting issues, add the language to
         --  the list of additional_vim_regex_highlighting and disabled languages for indent.
