@@ -1172,6 +1172,17 @@ vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI' }, {
   -- command = 'checktime',
 })
 
+-- Automatically stop LSP clients when the buffer is deleted
+vim.api.nvim_create_autocmd('BufDelete', {
+  callback = function(args)
+    local bufnr = args.buf
+    local clients = vim.lsp.get_clients { bufnr = bufnr }
+    for _, client in ipairs(clients) do
+      client.stop()
+    end
+  end,
+})
+
 -- https://github.com/JoosepAlviste/nvim-ts-context-commentstring/wiki/Integrations
 local get_option = vim.filetype.get_option
 vim.filetype.get_option = function(filetype, option)
