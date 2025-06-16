@@ -117,6 +117,15 @@ return {
         prompt_for_file_name = false,
       },
     },
+    filetypes = {
+      -- copy the file to the directory where markdown file is there
+      markdown = {
+        relative_to_current_file = true,
+        dir_path = function()
+          return 'asset_' .. vim.fn.expand '%:t:r'
+        end,
+      },
+    },
     keys = {
       -- suggested keymap
       { '<leader>p', '<cmd>PasteImage<cr>', desc = 'Paste image from system clipboard' },

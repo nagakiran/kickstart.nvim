@@ -38,6 +38,7 @@ inoremap <C-S>		<C-O>:update<CR>
 " Version control
 nnoremap <leader>vb :Git blame<cr>
 
+autocmd BufRead,BufNewFile *.yang set foldmethod=indent
 autocmd BufRead,BufNewFile *.ldgr set filetype=ledger
 set shiftwidth=2  " For indentation
 " Seeing it's bit distraction when highlight is done for all matches as eye attention scatters

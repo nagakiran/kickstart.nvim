@@ -106,6 +106,7 @@ return {
         cursor_applying_provider = nil, -- The provider used in the applying phase of Cursor Planning Mode, defaults to nil, when nil uses Config.provider as the provider for the applying phase
         copilot = {
           model = 'claude-3.5-sonnet',
+          -- disable_tools = true,
         },
         file_selector = {
           provider = 'telescope',
