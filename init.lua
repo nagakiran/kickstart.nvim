@@ -1149,14 +1149,7 @@ vim.cmd [[
 -- Relative path not working and need to be checked
 vim.cmd 'source ~/.config/nvim/vim_fns.vim'
 
-vim.api.nvim_set_keymap('n', '<C-a>', '<cmd>CodeCompanionActions<cr>', { noremap = true, silent = true })
-vim.api.nvim_set_keymap('v', '<C-a>', '<cmd>CodeCompanionActions<cr>', { noremap = true, silent = true })
-vim.api.nvim_set_keymap('n', '<LocalLeader>ct', '<cmd>CodeCompanionChat Toggle<cr>', { noremap = true, silent = true })
-vim.api.nvim_set_keymap('v', '<LocalLeader>ct', '<cmd>CodeCompanionChat Toggle<cr>', { noremap = true, silent = true })
-vim.api.nvim_set_keymap('v', 'ga', '<cmd>CodeCompanionChat Add<cr>', { noremap = true, silent = true })
-
--- Expand 'cc' into 'CodeCompanion' in the command line
-vim.cmd [[cab cc CodeCompanion]]
+-- CodeCompanion keymaps are now defined in lua/custom/plugins/codecompanion.lua
 
 -- This is working fine when tab containing the file is not in focus and switch to that tab, it's refreshing?
 -- vim.api.nvim_create_autocmd({ 'FocusGained', 'BufEnter' }, {
@@ -1194,6 +1187,7 @@ end
 
 -- Load Avante custom keymappings
 require 'avante_config'
+require 'codecompanion_config'
 
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et
