@@ -415,6 +415,16 @@ require('lazy').setup({
         --     i = { ['<c-enter>'] = 'to_fuzzy_refine' },
         --   },
         -- },
+        defaults = {
+          mappings = {
+            i = {
+              ['<C-a>'] = require('telescope.actions').toggle_all,
+            },
+            n = {
+              ['<C-a>'] = require('telescope.actions').toggle_all,
+            },
+          },
+        },
         pickers = {
           jumplist = {
             -- fname_width = 80,
