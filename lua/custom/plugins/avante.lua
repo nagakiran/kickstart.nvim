@@ -103,17 +103,18 @@ return {
       local opts = {
         provider = 'copilot',
         auto_suggestions_provider = 'copilot',
-        cursor_applying_provider = nil, -- The provider used in the applying phase of Cursor Planning Mode, defaults to nil, when nil uses Config.provider as the provider for the applying phase
-        copilot = {
-          model = 'claude-3.5-sonnet',
-          -- disable_tools = true,
+        cursor_applying_provider = nil,
+        providers = {
+          copilot = {
+            model = 'claude-3.5-sonnet',
+            -- disable_tools = true,
+          },
         },
         file_selector = {
           provider = 'telescope',
           provider_opts = {
             find_command = function()
               local root = vim.fn.getcwd()
-              -- Add debug print to verify this function is being called
               vim.notify('Avante file selector called from: ' .. root, vim.log.levels.ERROR)
               return {
                 'rg',
