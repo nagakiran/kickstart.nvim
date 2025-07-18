@@ -712,7 +712,14 @@ require('lazy').setup({
       local servers = {
         -- clangd = {},
         gopls = {},
-        pyright = {},
+        pyright = {
+          settings = {
+            python = {
+              venvPath = '/Users/nagakiran/.pyenv/versions', -- parent directory of your envs
+              venv = 'myenv', -- name of your environment
+            },
+          },
+        },
         eslint = {},
         -- rust_analyzer = {},
         -- ... etc. See `:help lspconfig-all` for a list of all the pre-configured LSPs
@@ -876,6 +883,9 @@ require('lazy').setup({
       luasnip.config.setup {}
 
       cmp.setup {
+        -- experimental = {
+        --   ghost_text = true, -- enables ghost text for the selected completion
+        -- },
         snippet = {
           expand = function(args)
             luasnip.lsp_expand(args.body)
@@ -889,6 +899,8 @@ require('lazy').setup({
         --
         -- No, but seriously. Please read `:help ins-completion`, it is really good!
         mapping = cmp.mapping.preset.insert {
+          -- To map Tab to accept current suggestion
+          -- ['<Tab>'] = cmp.mapping.confirm { select = true },
           -- Select the [n]ext item
           ['<C-n>'] = cmp.mapping.select_next_item(),
           -- Select the [p]revious item
