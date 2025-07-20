@@ -231,32 +231,57 @@ return {
     event = 'InsertEnter',
     config = function()
       require('copilot').setup {
+        filetypes = {
+          codecompanion = true,
+        },
         -- disabling suggestion/panel as using copilot-cmp with nvim-cmp
         suggestion = {
           enabled = true,
           auto_trigger = true,
+          debounce = 75, -- Wait 75ms after you stop typing before showing suggestions
           keymap = {
             -- other keymaps
-            accept = false,
+            -- accept = false,
+            accept = '<M-l>',
             accept_word = '<M-w>',
             accept_line = '<M-e>',
+            dismiss = '<C-]>',
           },
         },
         panel = {
           enabled = false,
         },
       }
-      vim.keymap.set('i', '<Tab>', function()
-        if require('copilot.suggestion').is_visible() then
-          require('copilot.suggestion').accept()
-        else
-          vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<Tab>', true, false, true), 'n', false)
-        end
-      end, { desc = 'Super Tab' })
+      -- vim.keymap.set('i', '<Tab>', function()
+      --   if require('copilot.suggestion').is_visible() then
+      --     require('copilot.suggestion').accept()
+      --   else
+      --     vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<Tab>', true, false, true), 'n', false)
+      --   end
+      -- end, { desc = 'Super Tab' })
+    end,
+  },
+  {
+    'supermaven-inc/supermaven-nvim',
+    enabled = false, -- This disables the plugin
+    config = function()
+      require('supermaven-nvim').setup {
+        keymaps = {
+          accept_suggestion = '<m-tab>',
+          clear_suggestion = '<m-k>',
+          accept_word = '<m-j>',
+        },
+        ignore_filetypes = { cpp = true }, -- or { "cpp", }
+        disable_inline_completion = false, -- disables inline completion for use with cmp
+      }
     end,
   },
   {
     'zbirenbaum/copilot-cmp', -- Lua plugin to turn github copilot into a cmp source
+    enabled = false,
+    -- cond = function()
+    --   return vim.bo.filetype == 'codecompanion'
+    -- end,
     after = { 'copilot.lua' },
     config = function()
       require('copilot_cmp').setup()
