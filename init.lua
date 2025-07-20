@@ -176,6 +176,15 @@ vim.opt.scrolloff = 10
 -- Clear highlights on search when pressing <Esc> in normal mode
 --  See `:help hlsearch`
 vim.keymap.set('n', '<Esc>', '<cmd>nohlsearch<CR>')
+-- vim.keymap.set('i', '<Tab>', function()
+--   if require('supermaven-nvim').has_suggestion() then
+--     require('supermaven-nvim').accept_suggestion()
+--   elseif vim.fn['vsnip#available'](1) == 1 then
+--     return '<Plug>(vsnip-expand-or-jump)'
+--   else
+--     return '<Tab>'
+--   end
+-- end, { expr = true, silent = true })
 
 -- Diagnostic keymaps
 vim.keymap.set('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagnostic [Q]uickfix list' })
@@ -217,6 +226,13 @@ vim.api.nvim_create_autocmd('TextYankPost', {
   group = vim.api.nvim_create_augroup('kickstart-highlight-yank', { clear = true }),
   callback = function()
     vim.highlight.on_yank()
+  end,
+})
+
+-- Add this autocmd to clear virtual text on mode changes
+vim.api.nvim_create_autocmd({ 'InsertLeave', 'BufLeave' }, {
+  callback = function()
+    require('copilot.suggestion').dismiss()
   end,
 })
 
@@ -1195,6 +1211,14 @@ vim.api.nvim_create_autocmd('BufDelete', {
     for _, client in ipairs(clients) do
       client.stop()
     end
+  end,
+})
+
+-- As copilot.lua is not loaded by default for codecompanion filetype, we need to enable it manually
+vim.api.nvim_create_autocmd('FileType', {
+  pattern = 'codecompanion', -- replace with your actual filetype
+  callback = function()
+    vim.cmd 'Copilot enable'
   end,
 })
 
