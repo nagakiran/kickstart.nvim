@@ -97,6 +97,8 @@ vim.g.maplocalleader = ';'
 -- Not needed as switching to dracula theme in iTerm2
 -- vim.opt.background = 'light'
 vim.opt.background = 'dark'
+-- To prevent Neovim from wrapping lines within a word
+vim.opt.linebreak = true
 
 -- Set to true if you have a Nerd Font installed and selected in the terminal
 vim.g.have_nerd_font = true
@@ -269,6 +271,9 @@ require('lazy').setup({
   -- NOTE: Plugins can be added with a link (or for a github repo: 'owner/repo' link).
   -- [ ] sometimes noticed detecting incorrectly like in ledger files
   -- 'tpope/vim-sleuth', -- Detect tabstop and shiftwidth automatically
+
+  -- Automatic GPG file handling
+  { 'jamessan/vim-gnupg' },
 
   -- NOTE: Plugins can also be added by using a table,
   -- with the first argument being the link and the following
@@ -1019,6 +1024,14 @@ require('lazy').setup({
       vim.cmd.colorscheme 'dracula'
     end,
   },
+  {
+    'morhetz/gruvbox',
+    priority = 1000,
+    init = function()
+      -- vim.opt.background = 'dark' -- or 'light' if you prefer
+      -- vim.cmd.colorscheme 'gruvbox'
+    end,
+  },
 
   -- Highlight todo, notes, etc in comments
   { 'folke/todo-comments.nvim', event = 'VimEnter', dependencies = { 'nvim-lua/plenary.nvim' }, opts = { signs = false } },
@@ -1227,6 +1240,17 @@ local get_option = vim.filetype.get_option
 vim.filetype.get_option = function(filetype, option)
   return option == 'commentstring' and require('ts_context_commentstring.internal').calculate_commentstring() or get_option(filetype, option)
 end
+
+-- Mapping to copy all messages to clipboard
+vim.keymap.set('n', '<leader>mc', function()
+  local messages = vim.api.nvim_exec('messages', true)
+  vim.fn.setreg('+', messages)
+  vim.notify('Messages copied to clipboard!', vim.log.levels.INFO)
+end, { desc = 'Copy :messages to clipboard' })
+
+-- Neovim GUIs (like VimR) where "ghost text" (virtual text used for suggestions, e.g., by `copilot.lua`) does not appear in a distinguishable color. This is usually due to the GUI not supporting or not mapping the `CmpGhostText` or `CopilotSuggestion` highlight groups correctly.
+vim.api.nvim_set_hl(0, 'CmpGhostText', { fg = '#888888', italic = true })
+vim.api.nvim_set_hl(0, 'CopilotSuggestion', { fg = '#888888', italic = true })
 
 -- Set this locally when working with python virtual environment as setting it globally causing other python library errors like taskwiki some libraries not found
 -- vim.g.python3_host_prog = os.getenv 'HOME' .. '/.pyenv/versions/myenv/bin/python'
