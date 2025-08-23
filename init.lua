@@ -132,7 +132,8 @@ vim.schedule(function()
 end)
 
 -- Enable break indent
-vim.opt.breakindent = true
+-- Don't wrapped lines visually indented to align with the indentation of the original line
+vim.opt.breakindent = false
 
 -- Save undo history
 vim.opt.undofile = true
@@ -1193,8 +1194,8 @@ require('lazy').setup({
 })
 
 vim.cmd [[
-  autocmd BufRead,BufNewFile ~/textfiles/journals/*.txt set filetype=jrnl.txtfmt.markdown
   autocmd BufRead,BufNewFile ~/textfiles/*.txt set filetype=txtfmt.markdown
+  autocmd BufRead,BufNewFile ~/textfiles/journals/*.txt set filetype=jrnl.txtfmt.markdown
   au BufNewFile,BufRead *.tjp,*.tji               setf tjp
   ]]
 -- Relative path not working and need to be checked
@@ -1249,6 +1250,7 @@ vim.keymap.set('n', '<leader>mc', function()
 end, { desc = 'Copy :messages to clipboard' })
 
 -- Neovim GUIs (like VimR) where "ghost text" (virtual text used for suggestions, e.g., by `copilot.lua`) does not appear in a distinguishable color. This is usually due to the GUI not supporting or not mapping the `CmpGhostText` or `CopilotSuggestion` highlight groups correctly.
+-- [ ] Somehow don't see these styles set by default and had to run manually
 vim.api.nvim_set_hl(0, 'CmpGhostText', { fg = '#888888', italic = true })
 vim.api.nvim_set_hl(0, 'CopilotSuggestion', { fg = '#888888', italic = true })
 
