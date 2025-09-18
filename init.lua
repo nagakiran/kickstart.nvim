@@ -497,10 +497,18 @@ require('lazy').setup({
       vim.keymap.set('n', '<leader>ss', builtin.builtin, { desc = '[S]earch [S]elect Telescope' })
       vim.keymap.set('n', '<leader>sw', builtin.grep_string, { desc = '[S]earch current [W]ord' })
       vim.keymap.set('n', '<leader>sg', builtin.live_grep, { desc = '[S]earch by [G]rep' })
+      vim.keymap.set('n', '<leader>sH', function()
+        require('telescope.builtin').live_grep {
+          additional_args = function(args)
+            return { '--hidden' }
+          end,
+        }
+      end, { desc = '[S]earch by [H]idden Grep' })
       vim.keymap.set('n', '<leader>sd', builtin.diagnostics, { desc = '[S]earch [D]iagnostics' })
       vim.keymap.set('n', '<leader>sr', builtin.resume, { desc = '[S]earch [R]esume' })
       vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
       vim.keymap.set('n', '<leader>sj', builtin.jumplist, { desc = '[J]ump List entries' })
+      vim.keymap.set('n', '<leader>si', builtin.changelist, { desc = 'Change List entries [I]nsert mode' })
       vim.keymap.set('n', '<leader>sb', builtin.git_bcommits, { desc = '[B]uffer Git Commits' })
       vim.keymap.set('n', '<leader>sc', builtin.git_commits, { desc = 'Git [C]ommits' })
       vim.keymap.set('n', '<leader>su', '<cmd>Telescope undo<cr>')
@@ -515,7 +523,7 @@ require('lazy').setup({
           cwd = git_dir,
         }
         builtin.live_grep(opts)
-      end, { desc = '[S]earch by [G]rep' })
+      end, { desc = '[S]earch by [G]rep from git root' })
 
       -- Slightly advanced example of overriding default behavior and theme
       vim.keymap.set('n', '<leader>/', function()
@@ -534,6 +542,16 @@ require('lazy').setup({
           prompt_title = 'Live Grep in Open Files',
         }
       end, { desc = '[S]earch [/] in Open Files' })
+
+      vim.keymap.set('n', '<leader>s?', function()
+        builtin.live_grep(require('telescope.themes').get_dropdown {
+          winblend = 10,
+          previewer = false,
+          search_dirs = { vim.fn.expand '%:p' },
+          prompt_title = 'Literal Search in Current Buffer',
+          path_display = { 'hidden' },
+        })
+      end, { desc = '[?] Literal search in current buffer' })
 
       -- Shortcut for searching your Neovim configuration files
       vim.keymap.set('n', '<leader>sn', function()
@@ -1022,7 +1040,7 @@ require('lazy').setup({
     'dracula/vim',
     priority = 1000, -- Make sure to load this before all the other start plugins.
     init = function()
-      vim.cmd.colorscheme 'dracula'
+      -- vim.cmd.colorscheme 'dracula'
     end,
   },
   {
@@ -1030,7 +1048,7 @@ require('lazy').setup({
     priority = 1000,
     init = function()
       -- vim.opt.background = 'dark' -- or 'light' if you prefer
-      -- vim.cmd.colorscheme 'gruvbox'
+      vim.cmd.colorscheme 'gruvbox'
     end,
   },
 
@@ -1192,10 +1210,11 @@ require('lazy').setup({
     },
   },
 })
-
 vim.cmd [[
-  autocmd BufRead,BufNewFile ~/textfiles/*.txt set filetype=txtfmt.markdown
-  autocmd BufRead,BufNewFile ~/textfiles/journals/*.txt set filetype=jrnl.txtfmt.markdown
+  autocmd BufRead,BufNewFile ~/textfiles/*.txt set filetype=markdown
+	" Need to add it explicitly as looks based markdown syntax file is not loaded automatically and treesitter/render-markdown syntax is getting loaded
+	autocmd FileType markdown source ~/.config/nvim/after/syntax/markdown.vim
+  " autocmd BufRead,BufNewFile ~/textfiles/journals/*.txt set filetype=markdown.jrnl.txtfmt
   au BufNewFile,BufRead *.tjp,*.tji               setf tjp
   ]]
 -- Relative path not working and need to be checked
@@ -1262,4 +1281,34 @@ require 'avante_config'
 require 'codecompanion_config'
 
 -- The line beneath this is called `modeline`. See `:help modeline`
--- vim: ts=2 sts=2 sw=2 et
+
+vim.api.nvim_set_hl(0, 'RenderMarkdownInlineHighlight', { fg = '#E39AA6', bg = '#1a190c', bold = true })
+vim.o.winbar = "%{expand('%:.')}" -- To show the file path just below tabbar
+
+vim.api.nvim_create_autocmd('FileType', {
+  pattern = 'typescriptreact',
+  callback = function()
+    -- vim.treesitter.query.set(
+    --   'tsx',
+    --   'injections',
+    --   [[
+    --    ((comment) @injection.content
+    -- 			 (#match? @injection.content "^/\\*\\*")
+    --        (#set! injection.language "markdown")
+    --        (#set! injection.combined))
+    --  ]]
+    -- )
+    -- Override markdown highlights to ensure they show
+    -- vim.api.nvim_set_hl(0, '@markup.strong.markdown_inline', { bold = true, fg = 'Orange' })
+    -- vim.api.nvim_set_hl(0, '@markup.strong', { bold = true, fg = 'Orange' })
+    -- vim.api.nvim_set_hl(0, '@text.strong', { bold = true, fg = 'Orange' })
+
+    -- Enable markdown highlighting
+    -- vim.treesitter.start(0, 'markdown')
+
+    -- Try to enable render-markdown
+    -- if package.loaded['render-markdown'] then
+    --   require('render-markdown').enable()
+    -- end
+  end,
+})

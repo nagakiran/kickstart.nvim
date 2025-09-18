@@ -11,4 +11,7 @@ highlight def link jtag Constant
 highlight def link jyear Identifier
 highlight def entryLine ctermfg=250 guifg=Gray
 
+syn match taskTitle "\[.*\] Task -.*$"
+highlight link taskTitle string
+
 let b:current_syntax = "jrnl"
