@@ -85,6 +85,45 @@ return {
     end,
   },
   {
+    -- Make sure to set this up properly if you have lazy=true
+    'MeanderingProgrammer/render-markdown.nvim',
+    opts = {
+      file_types = { 'markdown', 'Avante', 'typescriptreact' },
+      -- paragraph = {
+      --   enabled = false, -- Turn on / off paragraph rendering.
+      -- },
+      -- injections = {
+      --   tsx = {
+      --     enabled = true,
+      --     query = [[
+      -- 						((comment) @injection.content
+      --               (#set! injection.language "markdown"))
+      -- 					]],
+      --   },
+      -- },
+      html = {
+        -- Turn on / off all HTML rendering.
+        enable = false,
+        -- Additional modes to render HTML.
+        render_modes = false,
+        comment = {
+          -- Turn on / off HTML comment concealing.
+          conceal = true,
+          -- Optional text to inline before the concealed comment.
+          text = nil,
+          -- Highlight for the inlined text.
+          highlight = 'RenderMarkdownHtmlComment',
+        },
+        -- HTML tags whose start and end will be hidden and icon shown.
+        -- The key is matched against the tag name, value type below.
+        -- | icon      | gets inlined at the start |
+        -- | highlight | highlight for the icon    |
+        tag = {},
+      },
+    },
+    ft = { 'markdown', 'Avante', 'typescriptreact' },
+  },
+  {
     -- Had to do "yarn install" from ~/.local/share/nvim/lazy/markdown-preview.nvim/app
     'iamcco/markdown-preview.nvim',
     cmd = { 'MarkdownPreviewToggle', 'MarkdownPreview', 'MarkdownPreviewStop' },
@@ -170,10 +209,10 @@ return {
       },
     },
   },
-  {
-    -- Make sure to set this up properly if you have lazy=true		[copied from avante dependencies]
-    'MeanderingProgrammer/render-markdown.nvim',
-  },
+  -- {
+  --   -- Make sure to set this up properly if you have lazy=true		[copied from avante dependencies]
+  --   'MeanderingProgrammer/render-markdown.nvim',
+  -- },
   {
     'zenbro/mirror.vim', -- Efficient way to edit remote files on multiple environments with Vim.
   },
@@ -211,20 +250,20 @@ return {
       })
     end,
   },
-  {
-    'bpstahlman/txtfmt', -- Txtfmt (The Vim Highlighter) : "Rich text" highlighting in Vim! (colors, underline, bold, italic, etc...)
-    config = function()
-      vim.g.txtfmtMapwarn = 'c'
-      vim.g.txtfmtShortcuts = { ',b fbu cr' }
-      vim.g.txtfmtTokrange = '180S'
-      -- Disabling it as it conflicts with right-shift and repeat opeator
-      vim.g.txtfmtLeadingindent = 'none'
-      -- vim.api.nvim_create_autocmd({ 'BufRead', 'BufNewFile' }, {
-      --   pattern = '*.txt',
-      --   command = 'set filetype=txtfmt',
-      -- })
-    end,
-  },
+  -- {
+  --   'bpstahlman/txtfmt', -- Txtfmt (The Vim Highlighter) : "Rich text" highlighting in Vim! (colors, underline, bold, italic, etc...)
+  --   config = function()
+  --     vim.g.txtfmtMapwarn = 'c'
+  --     vim.g.txtfmtShortcuts = { ',b fbu cr' }
+  --     vim.g.txtfmtTokrange = '180S'
+  --     -- Disabling it as it conflicts with right-shift and repeat opeator
+  --     vim.g.txtfmtLeadingindent = 'none'
+  --     -- vim.api.nvim_create_autocmd({ 'BufRead', 'BufNewFile' }, {
+  --     --   pattern = '*.txt',
+  --     --   command = 'set filetype=txtfmt',
+  --     -- })
+  --   end,
+  -- },
   {
     'zbirenbaum/copilot.lua',
     cmd = 'Copilot',

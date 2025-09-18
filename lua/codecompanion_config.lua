@@ -10,5 +10,5 @@ require('which-key').add {
 require('which-key').add {
   mode = { 'v' },
   { 'ga', '<cmd>CodeCompanionChat Add<cr>', desc = 'Add to CodeCompanion Chat' },
-  { '<LocalLeader>cp', '<cmd>CodeCompanion<cr>', desc = 'CodeCompanion Prompt' },
+  { '<LocalLeader>cp', ":'<,'>CodeCompanion<cr>", desc = 'CodeCompanion Prompt' },
 }

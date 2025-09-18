@@ -9,6 +9,17 @@ return {
     config = function()
       local my_config = {
         -- Your existing CodeCompanion configuration
+        -- adapters = {
+        --   copilot = function()
+        --     return require('codecompanion.adapters').extend('copilot', {
+        --       schema = {
+        --         model = {
+        --           default = 'claude-3.5-sonnet',
+        --         },
+        --       },
+        --     })
+        --   end,
+        -- },
         strategies = {
           -- chat = {
           --   adapter = 'openai', -- or your preferred adapter
@@ -26,6 +37,13 @@ return {
                 contains_code = true,
               },
             },
+          },
+        },
+        opts = {
+          chat_logging = {
+            enabled = true, -- Enable chat logging
+            log_dir = nil, -- Use default location
+            auto_cleanup_days = 30, -- Auto-delete logs older than 30 days
           },
         },
 
