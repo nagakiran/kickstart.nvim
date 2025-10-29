@@ -21,6 +21,35 @@ return {
         --   end,
         -- },
         strategies = {
+          chat = {
+            roles = {
+              llm = function(adapter)
+                local model = adapter.model
+                -- Some adapters store model on .schema.model.default, some on .model, and value may be string or table
+                if not model and adapter.schema and adapter.schema.model then
+                  model = adapter.schema.model.default
+                end
+                -- If it's a function, call it to get the real value
+                if type(model) == 'function' then
+                  model = model(adapter)
+                end
+                -- If it's a table, attempt to extract an id or name field. Otherwise, fallback to string.
+                if type(model) == 'table' then
+                  model = model.id or model.name or model.label or vim.inspect(model)
+                end
+                -- Fallback: If model is not a string by now, skip appending it
+                if type(model) == 'string' and model ~= '' then
+                  return 'CodeCompanion (' .. adapter.formatted_name .. ' - ' .. model .. ')'
+                else
+                  return 'CodeCompanion (' .. adapter.formatted_name .. ')'
+                end
+              end,
+              ---The header name for your messages
+              ---@type string
+              user = 'Me',
+            },
+          },
+
           -- chat = {
           --   adapter = 'openai', -- or your preferred adapter
           -- },
