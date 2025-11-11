@@ -41,6 +41,13 @@ return {
 								]],
           },
         },
+        overrides = {
+          filetype = {
+            -- codecompanion = {
+            --   bullet = { enabled = false },
+            -- },
+          },
+        },
       }
     end,
   },

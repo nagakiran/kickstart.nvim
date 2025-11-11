@@ -49,6 +49,21 @@ return {
               ---@type string
               user = 'Me',
             },
+            opts = {
+              system_prompt = function(ctx)
+                -- Get the default system prompt from the config
+                -- local default_config = require('codecompanion.config').default
+                -- local default_prompt = default_config.strategies.chat.opts.system_prompt(args)
+
+                -- Replace the line that disallows diff formatting with one that encourages it
+                local default_prompt = ctx.default_system_prompt:gsub(
+                  'Do not include diff formatting unless explicitly asked%.',
+                  'When displaying diffs or patches for review (not using insert_edit_into_file tool), wrap them in ````diff code blocks. Do not use markers like "*** Begin Patch" and "*** End Patch".'
+                )
+
+                return default_prompt
+              end,
+            },
           },
 
           -- chat = {
