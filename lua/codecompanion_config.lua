@@ -5,7 +5,7 @@ require('which-key').add {
   { '<LocalLeader>ct', '<cmd>CodeCompanionChat Toggle<cr>', desc = 'Toggle CodeCompanion Chat' },
   { '<LocalLeader>ce', '<cmd>CodeCompanionChat /explain<cr>', desc = 'CodeCompanion explain' },
   { '<LocalLeader>cc', '<cmd>CodeCompanionChat<cr>', desc = 'CodeCompanion chat' },
-  { '<LocalLeader>cg', '<cmd>CodeCompanionChat /commit<cr>', desc = 'Generate Git Commit Message' },
+  { '<LocalLeader>cg', '<cmd>CodeCompanion /commit<cr>', desc = 'Generate Git Commit Message' },
 }
 require('which-key').add {
   mode = { 'v' },
