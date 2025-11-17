@@ -105,6 +105,7 @@ return {
           history = {
             enabled = true,
             opts = {
+              default_buf_title = '[CodeCompanion] ', -- No special characters
               -- Keymap to open history from chat buffer (default: gh)
               keymap = 'gh',
               -- Keymap to save the current chat manually (when auto_save is disabled)

@@ -1264,12 +1264,12 @@ vim.api.nvim_create_autocmd('BufDelete', {
 })
 
 -- As copilot.lua is not loaded by default for codecompanion filetype, we need to enable it manually
-vim.api.nvim_create_autocmd('FileType', {
-  pattern = 'codecompanion', -- replace with your actual filetype
-  callback = function()
-    vim.cmd 'Copilot enable'
-  end,
-})
+-- vim.api.nvim_create_autocmd('FileType', {
+--   pattern = 'codecompanion', -- replace with your actual filetype
+--   callback = function()
+--     vim.cmd 'Copilot enable'
+--   end,
+-- })
 
 -- https://github.com/JoosepAlviste/nvim-ts-context-commentstring/wiki/Integrations
 local get_option = vim.filetype.get_option

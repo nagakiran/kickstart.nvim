@@ -320,6 +320,26 @@ return {
     event = 'InsertEnter',
     config = function()
       require('copilot').setup {
+        should_attach = function(bufnr, bufname)
+          local filetype = vim.api.nvim_get_option_value('filetype', { buf = bufnr })
+
+          -- Allow codecompanion chat buffers specifically
+          if filetype == 'codecompanion' then
+            return true
+          end
+
+          -- Default behavior for other buffers
+          if not vim.api.nvim_get_option_value('buflisted', { buf = bufnr }) then
+            return false
+          end
+
+          local buftype = vim.api.nvim_get_option_value('buftype', { buf = bufnr })
+          if buftype ~= '' then
+            return false
+          end
+
+          return true
+        end,
         filetypes = {
           codecompanion = true,
         },
