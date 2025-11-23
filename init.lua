@@ -1253,15 +1253,24 @@ vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI' }, {
 })
 
 -- Automatically stop LSP clients when the buffer is deleted
-vim.api.nvim_create_autocmd('BufDelete', {
-  callback = function(args)
-    local bufnr = args.buf
-    local clients = vim.lsp.get_clients { bufnr = bufnr }
-    for _, client in ipairs(clients) do
-      client.stop()
-    end
-  end,
-})
+-- -- Enable back when reuired with proper comments for adding this as ideally nvim LSP client handles buffer cleanup automatically (faced issue as copilot LSP is global across buffers and due to this it's stopping)
+-- vim.api.nvim_create_autocmd('BufDelete', {
+--   callback = function(args)
+--     local bufnr = args.buf
+--     local clients = vim.lsp.get_clients { bufnr = bufnr }
+--     for _, client in ipairs(clients) do
+--       -- Detach the buffer, don't stop the client
+--			 -- if vim.lsp.buf_is_attached(bufnr, client.id) then
+--			 --   vim.lsp.buf_detach_client(bufnr, client.id)
+--			 -- end
+--			 -- Don't stop global clients like Copilot
+-- 			 --	if client.name ~= 'copilot' then
+--       --   vim.lsp.buf_detach_client(bufnr, client.id)
+--       -- end
+--       client.stop()
+--     end
+--   end,
+-- })
 
 -- As copilot.lua is not loaded by default for codecompanion filetype, we need to enable it manually
 -- vim.api.nvim_create_autocmd('FileType', {
