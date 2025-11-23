@@ -320,11 +320,20 @@ return {
     event = 'InsertEnter',
     config = function()
       require('copilot').setup {
+        logger = {
+          file = vim.fn.stdpath 'log' .. '/copilot-lua.log',
+          file_log_level = vim.log.levels.OFF,
+          print_log_level = vim.log.levels.WARN,
+          trace_lsp = 'off', -- "off" | "messages" | "verbose"
+          trace_lsp_progress = false,
+          log_lsp_messages = false,
+        },
+        copilot_node_command = '/Users/nagakiran/.nvm/versions/node/v22.21.1/bin/node', -- Node.js version must be > 22
         should_attach = function(bufnr, bufname)
           local filetype = vim.api.nvim_get_option_value('filetype', { buf = bufnr })
 
           -- Allow codecompanion chat buffers specifically
-          if filetype == 'codecompanion' then
+          if filetype == 'codecompanion' or filetype == 'ledger' then
             return true
           end
 
@@ -340,9 +349,10 @@ return {
 
           return true
         end,
-        filetypes = {
-          codecompanion = true,
-        },
+        -- filetypes = {
+        --   -- codecompanion = true,
+        --   -- ledger = true,
+        -- },
         -- disabling suggestion/panel as using copilot-cmp with nvim-cmp
         suggestion = {
           enabled = true,
