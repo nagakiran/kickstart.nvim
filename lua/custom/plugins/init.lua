@@ -196,8 +196,10 @@ return {
     'HakonHarnes/img-clip.nvim',
     event = 'VeryLazy',
     opts = {
-      -- add options here
-      -- or leave it empty to use the default settings
+      -- Disable automatic paste interception to avoid delays when pasting URLs
+      drag_and_drop = {
+        enabled = false,
+      },
       default = {
         file_name = function()
           local desctipion = vim.fn.input 'Description: '
@@ -205,14 +207,14 @@ return {
         end,
         prompt_for_file_name = false,
       },
-    },
-    filetypes = {
-      -- copy the file to the directory where markdown file is there
-      markdown = {
-        relative_to_current_file = true,
-        dir_path = function()
-          return 'asset_' .. vim.fn.expand '%:t:r'
-        end,
+      filetypes = {
+        -- copy the file to the directory where markdown file is there
+        markdown = {
+          relative_to_current_file = true,
+          dir_path = function()
+            return 'asset_' .. vim.fn.expand '%:t:r'
+          end,
+        },
       },
     },
     keys = {
