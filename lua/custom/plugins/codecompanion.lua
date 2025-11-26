@@ -7,9 +7,35 @@ return {
       'ravitemer/mcphub.nvim', -- Add MCPHub as dependency
       'ravitemer/codecompanion-history.nvim',
     },
+    build = function()
+      local plugin_path = vim.fn.stdpath 'data' .. '/lazy/codecompanion.nvim'
+      local patch_file = vim.fn.stdpath 'config' .. '/patches/codecompanion/skip_oauth.patch'
+      vim.system({ 'patch', '-d', plugin_path, '-p1', '-i', patch_file }, { text = true }, function(obj)
+        vim.schedule(function()
+          if obj.code == 0 then
+            vim.notify('Patched codecompanion.nvim successfully', vim.log.levels.INFO)
+          end
+        end)
+      end)
+    end,
     config = function()
       local my_config = {
         -- Your existing CodeCompanion configuration
+        -- ACP adapters configuration for Gemini CLI
+        -- adapters = {
+        --   acp = {
+        --     gemini_cli = function()
+        --       return require('codecompanion.adapters').extend('gemini_cli', {
+        --         defaults = {
+        --           auth_method = 'oauth-personal', -- "oauth-personal"|"gemini-api-key"|"vertex-ai"
+        --         },
+        --         env = {
+        --           -- GEMINI_API_KEY = 'cmd:op read op://personal/Gemini_API/credential --no-newline',
+        --         },
+        --       })
+        --     end,
+        --   },
+        -- },
         -- adapters = {
         --   copilot = function()
         --     return require('codecompanion.adapters').extend('copilot', {
