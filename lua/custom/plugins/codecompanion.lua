@@ -20,6 +20,19 @@ return {
     end,
     config = function()
       local my_config = {
+        adapters = {
+          http = {
+            copilot = function()
+              return require('codecompanion.adapters').extend('copilot', {
+                schema = {
+                  model = {
+                    -- default = 'claude-haiku-4.5',
+                  },
+                },
+              })
+            end,
+          },
+        },
         -- Your existing CodeCompanion configuration
         -- ACP adapters configuration for Gemini CLI
         -- adapters = {
@@ -47,6 +60,18 @@ return {
         --     })
         --   end,
         -- },
+        interactions = {
+          chat = {
+            adapter = {
+              name = 'copilot', -- or your preferred adapter
+              model = 'claude-haiku-4.5',
+            },
+            -- model = 'gpt-4.1',
+          },
+          -- inline = {
+          -- 	adapter = 'openai',
+          -- },
+        },
         strategies = {
           chat = {
             roles = {
@@ -91,13 +116,6 @@ return {
               end,
             },
           },
-
-          -- chat = {
-          --   adapter = 'openai', -- or your preferred adapter
-          -- },
-          -- inline = {
-          --   adapter = 'openai',
-          -- },
           slash_commands = {
             ['file'] = {
               -- Location to the slash command in CodeCompanion
