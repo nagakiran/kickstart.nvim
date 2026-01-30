@@ -226,7 +226,7 @@ return {
     'junegunn/vim-easy-align', --A simple, easy-to-use Vim alignment plugin.
   },
   {
-    'dhruvasagar/vim-table-mode', -- VIM Table Mode for instant table creation.
+    'dhruvasagar/vim-table-mode', -- VIM Table Mode for instant table creation. (Tabelize)
   },
   {
     'NvChad/nvim-colorizer.lua', -- The fastest Neovim colorizer
@@ -330,7 +330,7 @@ return {
           trace_lsp_progress = false,
           log_lsp_messages = false,
         },
-        copilot_node_command = '/Users/nagakiran/.nvm/versions/node/v22.21.1/bin/node', -- Node.js version must be > 22
+        copilot_node_command = vim.fn.expand '$HOME' .. '/.nvm/versions/node/v22.21.1/bin/node', -- Node.js version must be > 22
         should_attach = function(bufnr, bufname)
           local filetype = vim.api.nvim_get_option_value('filetype', { buf = bufnr })
 
@@ -467,5 +467,20 @@ return {
       { '<leader>pr', '<cmd>CopilotChatReset<cr>', desc = 'Co[p]ilotChatReset' },
     },
     -- See Commands section for default commands if you want to lazy load on them
+  },
+  {
+    'Thiago4532/mdmath.nvim',
+    dependencies = {
+      'nvim-treesitter/nvim-treesitter',
+    },
+    opts = {
+      -- Filetypes that the plugin will be enabled by default.
+      filetypes = { 'markdown' },
+    },
+    -- enabled = not vim.g.vimr, -- Disable in VimR
+    -- The build is already done by default in lazy.nvim, so you don't need
+    -- the next line, but you can use the command `:MdMath build` to rebuild
+    -- if the build fails for some reason.
+    -- build = ':MdMath build'
   },
 }

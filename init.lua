@@ -767,7 +767,7 @@ require('lazy').setup({
       --        For example, to see the options for `lua_ls`, you could go to: https://luals.github.io/wiki/settings/
       local servers = {
         -- clangd = {},
-        gopls = {},
+        -- gopls = {},
         pyright = {
           settings = {
             python = {
@@ -872,7 +872,7 @@ require('lazy').setup({
           lsp_format_opt = 'fallback'
         end
         return {
-          -- Increasing the timout as getting timeout error sometimes
+          -- Increasing the timeout as getting timeout error sometimes
           timeout_ms = 5000,
           lsp_format = lsp_format_opt,
         }
@@ -880,7 +880,7 @@ require('lazy').setup({
       formatters_by_ft = {
         lua = { 'stylua' },
         -- Conform can also run multiple formatters sequentially
-        -- python = { "isort", "black" },
+        python = { 'isort', 'black' },
         --
         -- You can use 'stop_after_first' to run the first available formatter from the list
         javascript = { 'prettierd', 'prettier', stop_after_first = true },
@@ -1299,7 +1299,8 @@ vim.api.nvim_set_hl(0, 'CmpGhostText', { fg = '#888888', italic = true })
 vim.api.nvim_set_hl(0, 'CopilotSuggestion', { fg = '#888888', italic = true })
 
 -- Set this locally when working with python virtual environment as setting it globally causing other python library errors like taskwiki some libraries not found
--- vim.g.python3_host_prog = os.getenv 'HOME' .. '/.pyenv/versions/myenv/bin/python'
+-- Activte myenv pyenv before launching nvim for this to work properly
+vim.g.python3_host_prog = os.getenv 'HOME' .. '/.pyenv/versions/myenv/bin/python'
 
 -- Load Avante custom keymappings
 require 'avante_config'
