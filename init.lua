@@ -523,7 +523,54 @@ require('lazy').setup({
       vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
       vim.keymap.set('n', '<leader>sj', builtin.jumplist, { desc = '[J]ump List entries' })
       vim.keymap.set('n', '<leader>si', builtin.changelist, { desc = 'Change List entries [I]nsert mode' })
-      vim.keymap.set('n', '<leader>sb', builtin.git_bcommits, { desc = '[B]uffer Git Commits' })
+      -- vim.keymap.set('n', '<leader>sb', builtin.git_bcommits, { desc = '[B]uffer Git Commits' })
+      vim.keymap.set('n', '<leader>sb', function()
+        builtin.git_bcommits {
+          attach_mappings = function(prompt_bufnr, map)
+            -- 1. Open the file at the selected commit in a new tab
+            actions.select_tab:replace(function()
+              local selection = action_state.get_selected_entry()
+              actions.close(prompt_bufnr)
+
+              -- We need the path relative to the git root for 'git show'
+              local relative_path = vim.fn.fnamemodify(selection.current_file, ':.')
+
+              vim.cmd 'tabnew'
+              local new_buf = vim.api.nvim_get_current_buf()
+
+              -- Fetch content: git show <sha>:<path>
+              local cmd = string.format('git show %s:%s', selection.value, relative_path)
+              local content = vim.fn.systemlist(cmd)
+
+              if vim.v.shell_error ~= 0 then
+                vim.api.nvim_err_writeln 'Failed to fetch git content'
+                return
+              end
+
+              vim.api.nvim_buf_set_lines(new_buf, 0, -1, false, content)
+
+              -- Set buffer as a temporary scratchpad
+              vim.bo[new_buf].buftype = 'nofile'
+              vim.bo[new_buf].bufhidden = 'wipe'
+              vim.bo[new_buf].filetype = vim.filetype.match { filename = selection.current_file } or ''
+
+              -- Set a descriptive name for the tab
+              local short_sha = selection.value:sub(1, 7)
+              local filename = vim.fn.fnamemodify(selection.current_file, ':t')
+              vim.api.nvim_buf_set_name(new_buf, short_sha .. ':' .. filename)
+            end)
+
+            -- 2. Populate all commits into quickfix on <CR>
+            actions.select_default:replace(function()
+              actions.send_to_qflist(prompt_bufnr)
+              actions.open_qflist(prompt_bufnr)
+            end)
+
+            return true
+          end,
+        }
+      end, { desc = '[S]earch [B]uffer Git Commits' })
+
       -- Don't see this function in code ??
       -- vim.keymap.set('n', '<leader>sz', builtin.git_bcommits_range, { desc = '[B]uffer Git Commits' })
       vim.keymap.set('n', '<leader>sc', builtin.git_commits, { desc = 'Git [C]ommits' })
@@ -1133,11 +1180,27 @@ require('lazy').setup({
           -- separator = nil,
           -- zindex = 20, -- The Z-index of the context window
         },
+        config = function(_, opts)
+          require('treesitter-context').setup(opts)
+          local function set_context_lines(lines)
+            lines = tonumber(lines)
+            if lines and lines >= 0 then
+              opts.max_lines = lines
+              require('treesitter-context').setup(opts)
+              vim.notify('treesitter-context max_lines set to ' .. lines)
+            else
+              vim.notify('Invalid input for max_lines', vim.log.levels.ERROR)
+            end
+          end
+          vim.api.nvim_create_user_command('SetContextLines', function(args)
+            set_context_lines(args.fargs[1])
+          end, { nargs = 1, desc = 'Set nvim-treesitter-context max_lines' })
+        end,
       },
     },
     -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
     opts = {
-      ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' },
+      ensure_installed = { 'bash', 'c', 'diff', 'html', 'json', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' },
       -- Autoinstall languages that are not installed
       -- Disabling for now as it throws an error when parser is not available like starlark for .bazel files
       auto_install = false,
