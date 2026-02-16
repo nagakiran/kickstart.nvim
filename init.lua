@@ -527,6 +527,43 @@ require('lazy').setup({
       vim.keymap.set('n', '<leader>sb', function()
         builtin.git_bcommits {
           attach_mappings = function(prompt_bufnr, map)
+            local function diff_commit(split_cmd)
+              local selection = action_state.get_selected_entry()
+              actions.close(prompt_bufnr)
+              local relative_path = vim.fn.fnamemodify(selection.current_file, ':.')
+
+              local function create_git_buf(rev, prefix)
+                local cmd = string.format('git show %s:%s', rev, relative_path)
+                local content = vim.fn.systemlist(cmd)
+                if vim.v.shell_error ~= 0 then
+                  return nil
+                end
+                local bufnr = vim.api.nvim_create_buf(false, true)
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, content)
+                vim.bo[bufnr].filetype = vim.filetype.match { filename = selection.current_file } or ''
+                vim.bo[bufnr].buftype = 'nofile'
+                vim.bo[bufnr].bufhidden = 'wipe'
+                vim.api.nvim_buf_set_name(bufnr, prefix .. ':' .. selection.value:sub(1, 7) .. ':' .. vim.fn.fnamemodify(selection.current_file, ':t'))
+                return bufnr
+              end
+
+              local buf_new = create_git_buf(selection.value, 'NEW')
+              local buf_old = create_git_buf(selection.value .. '^', 'OLD')
+
+              if not buf_new then
+                vim.api.nvim_err_writeln 'Failed to fetch commit content'
+                return
+              end
+
+              vim.cmd 'tabnew'
+              vim.api.nvim_set_current_buf(buf_new)
+              vim.cmd 'diffthis'
+              if buf_old then
+                vim.cmd(split_cmd .. ' ' .. buf_old)
+                vim.cmd 'diffthis'
+              end
+            end
+
             -- 1. Open the file at the selected commit in a new tab
             actions.select_tab:replace(function()
               local selection = action_state.get_selected_entry()
@@ -560,7 +597,17 @@ require('lazy').setup({
               vim.api.nvim_buf_set_name(new_buf, short_sha .. ':' .. filename)
             end)
 
-            -- 2. Populate all commits into quickfix on <CR>
+            -- 2. Diff commit against its parent (Vertical)
+            actions.select_vertical:replace(function()
+              diff_commit 'leftabove vert sbuffer'
+            end)
+
+            -- 3. Diff commit against its parent (Horizontal)
+            actions.select_horizontal:replace(function()
+              diff_commit 'belowright sbuffer'
+            end)
+
+            -- 4. Populate all commits into quickfix on <CR>
             actions.select_default:replace(function()
               actions.send_to_qflist(prompt_bufnr)
               actions.open_qflist(prompt_bufnr)
