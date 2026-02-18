@@ -30,7 +30,28 @@ return {
     ft = { 'markdown', 'Avante', 'codecompanion', 'typescriptreact' },
     config = function()
       require('render-markdown').setup {
-        anti_conceal = { enabled = false },
+        anti_conceal = {
+          enabled = true,
+          ignore = {
+            head_icon = { 'n' },
+            head_background = { 'n' },
+            head_border = { 'n' },
+            code_language = { 'n' },
+            code_background = { 'n' },
+            code_border = { 'n' },
+            dash = { 'n' },
+            bullet = { 'n' },
+            check_icon = { 'n' },
+            check_scope = { 'n' },
+            quote = { 'n' },
+            table_border = { 'n' },
+            callout = { 'n' },
+            link = { 'n' },
+            sign = { 'n' },
+          },
+        },
+        html = { enabled = false },
+        render_modes = { 'n', 'c', 't', 'i' },
         file_types = { 'markdown', 'typescriptreact', 'Avante', 'codecompanion' },
         injections = {
           typescriptreact = {
@@ -49,6 +70,14 @@ return {
           },
         },
       }
+
+      -- Custom command to toggle anti_conceal dynamically at runtime
+      vim.api.nvim_create_user_command('RenderMarkdownToggleAntiConceal', function()
+        local config = require('render-markdown.state').config
+        local new_state = not config.anti_conceal.enabled
+        require('render-markdown').setup { anti_conceal = { enabled = new_state } }
+        vim.notify('Markdown Anti-Conceal: ' .. (new_state and 'Enabled' or 'Disabled'))
+      end, { desc = 'Toggle Render-Markdown Anti-Conceal' })
     end,
   },
 }
