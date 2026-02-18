@@ -151,6 +151,10 @@ return {
       -- 					]],
       --   },
       -- },
+      -- render_modes = { 'n', 'c', 't' },
+      -- render_modes = true,
+      -- disable_cursorline_rendering = false,
+      anti_conceal = { enabled = false },
       html = {
         -- Turn on / off all HTML rendering.
         enable = false,

@@ -29,8 +29,8 @@ return {
     -- },
     ft = { 'markdown', 'Avante', 'codecompanion', 'typescriptreact' },
     config = function()
-      -- vim.treesitter.language.register('markdown', 'typescriptreact')
       require('render-markdown').setup {
+        anti_conceal = { enabled = false },
         file_types = { 'markdown', 'typescriptreact', 'Avante', 'codecompanion' },
         injections = {
           typescriptreact = {
