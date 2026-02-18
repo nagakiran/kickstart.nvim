@@ -135,49 +135,6 @@ return {
     end,
   },
   {
-    -- Make sure to set this up properly if you have lazy=true
-    'MeanderingProgrammer/render-markdown.nvim',
-    opts = {
-      file_types = { 'markdown', 'Avante', 'typescriptreact' },
-      -- paragraph = {
-      --   enabled = false, -- Turn on / off paragraph rendering.
-      -- },
-      -- injections = {
-      --   tsx = {
-      --     enabled = true,
-      --     query = [[
-      -- 						((comment) @injection.content
-      --               (#set! injection.language "markdown"))
-      -- 					]],
-      --   },
-      -- },
-      -- render_modes = { 'n', 'c', 't' },
-      -- render_modes = true,
-      -- disable_cursorline_rendering = false,
-      anti_conceal = { enabled = false },
-      html = {
-        -- Turn on / off all HTML rendering.
-        enable = false,
-        -- Additional modes to render HTML.
-        render_modes = false,
-        comment = {
-          -- Turn on / off HTML comment concealing.
-          conceal = true,
-          -- Optional text to inline before the concealed comment.
-          text = nil,
-          -- Highlight for the inlined text.
-          highlight = 'RenderMarkdownHtmlComment',
-        },
-        -- HTML tags whose start and end will be hidden and icon shown.
-        -- The key is matched against the tag name, value type below.
-        -- | icon      | gets inlined at the start |
-        -- | highlight | highlight for the icon    |
-        tag = {},
-      },
-    },
-    ft = { 'markdown', 'Avante', 'typescriptreact' },
-  },
-  {
     -- Had to do "yarn install" from ~/.local/share/nvim/lazy/markdown-preview.nvim/app
     'iamcco/markdown-preview.nvim',
     cmd = { 'MarkdownPreviewToggle', 'MarkdownPreview', 'MarkdownPreviewStop' },
