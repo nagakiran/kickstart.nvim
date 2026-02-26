@@ -443,9 +443,17 @@ require('lazy').setup({
           mappings = {
             i = {
               ['<C-a>'] = require('telescope.actions').toggle_all,
+              ['<C-j>'] = require('telescope.actions').move_selection_next,
+              ['<C-k>'] = require('telescope.actions').move_selection_previous,
+              ['<C-f>'] = require('telescope.actions').results_scrolling_down,
+              ['<C-b>'] = require('telescope.actions').results_scrolling_up,
             },
             n = {
               ['<C-a>'] = require('telescope.actions').toggle_all,
+              ['<C-j>'] = require('telescope.actions').move_selection_next,
+              ['<C-k>'] = require('telescope.actions').move_selection_previous,
+              ['<C-f>'] = require('telescope.actions').results_scrolling_down,
+              ['<C-b>'] = require('telescope.actions').results_scrolling_up,
             },
           },
         },
@@ -634,6 +642,15 @@ require('lazy').setup({
         }
         builtin.live_grep(opts)
       end, { desc = '[S]earch by [G]rep from git root' })
+
+      -- Grep within a specific subdirectory (prompts for path with tab-completion)
+      vim.keymap.set('n', '<leader>sD', function()
+        local dir = vim.fn.input('Search dir: ', '', 'dir')
+        if dir == '' then
+          return
+        end
+        builtin.live_grep { search_dirs = { dir } }
+      end, { desc = '[S]earch in sub[D]irectory' })
 
       -- Slightly advanced example of overriding default behavior and theme
       vim.keymap.set('n', '<leader>/', function()
