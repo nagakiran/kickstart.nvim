@@ -741,3 +741,8 @@ vim.opt.tags = vim.fn.expand '~/textfiles/tags'
 --   -- end,
 -- })
 vim.g.fugitive_summary_log_columns = { 'date', 'author', 'subject' }
+
+local python_path = '/home/nagakirank/.venvs/testenv/bin/python'
+if vim.fn.filereadable(python_path) == 1 then
+  vim.g.python3_host_prog = python_path
+end
