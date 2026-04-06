@@ -896,6 +896,9 @@ require('lazy').setup({
         --
         -- But for many setups, the LSP (`ts_ls`) will work just fine
         ts_ls = {
+          root_dir = function(fname)
+            return require('lspconfig.util').find_git_ancestor(fname) or require('lspconfig.util').root_pattern('tsconfig.json', 'package.json')(fname)
+          end,
           init_options = {
             -- Need to use when specific tsconfig to be chosen like atom/stockscreener
             -- tsconfig = vim.fn.getcwd() .. '/tsconfig.json',
