@@ -139,6 +139,7 @@ return {
         -- MCPHub extension configuration
         extensions = {
           mcphub = {
+            enabled = false,
             callback = 'mcphub.extensions.codecompanion',
             opts = {
               show_result_in_chat = true, -- Show MCP tool results in chat
