@@ -1420,6 +1420,13 @@ vim.keymap.set('n', '<leader>mc', function()
   vim.notify('Messages copied to clipboard!', vim.log.levels.INFO)
 end, { desc = 'Copy :messages to clipboard' })
 
+-- Shortcut to copy the current file absolute path name to clipboard
+vim.keymap.set('n', '<leader>cp', function()
+  local path = vim.fn.expand '%:p'
+  vim.fn.setreg('+', path)
+  vim.notify('Copied absolute path to clipboard: ' .. path, vim.log.levels.INFO)
+end, { desc = 'Copy current file absolute [P]ath' })
+
 -- Neovim GUIs (like VimR) where "ghost text" (virtual text used for suggestions, e.g., by `copilot.lua`) does not appear in a distinguishable color. This is usually due to the GUI not supporting or not mapping the `CmpGhostText` or `CopilotSuggestion` highlight groups correctly.
 -- [ ] Somehow don't see these styles set by default and had to run manually
 vim.api.nvim_set_hl(0, 'CmpGhostText', { fg = '#888888', italic = true })
