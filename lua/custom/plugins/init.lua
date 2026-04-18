@@ -431,6 +431,7 @@ return {
   },
   {
     'Thiago4532/mdmath.nvim',
+    enabled = false,
     dependencies = {
       'nvim-treesitter/nvim-treesitter',
     },
