@@ -26,7 +26,7 @@ return {
               return require('codecompanion.adapters').extend('copilot', {
                 schema = {
                   model = {
-                    -- default = 'claude-haiku-4.5',
+                    default = 'claude-haiku-4.5',
                   },
                 },
               })
@@ -177,7 +177,7 @@ return {
                 adapter = 'copilot',
                 ---Model for generating titles (defaults to current chat model)
                 -- model = nil, -- "gpt-4o"
-                model = 'gpt-4.1',
+                model = 'claude-haiku-4.5',
                 ---Number of user prompts after which to refresh the title (0 to disable)
                 refresh_every_n_prompts = 0, -- e.g., 3 to refresh after every 3rd user prompt
                 ---Maximum number of times to refresh the title (default: 3)
@@ -207,7 +207,7 @@ return {
                   -- adapter = nil, -- defaults to current chat adapter
                   -- model = nil, -- defaults to current chat model
                   adapter = 'copilot',
-                  model = 'gpt-4.1',
+                  model = 'claude-haiku-4.5',
                   context_size = 90000, -- max tokens that the model supports
                   include_references = true, -- include slash command content
                   include_tool_outputs = true, -- include tool execution results
