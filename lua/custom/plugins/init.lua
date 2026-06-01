@@ -462,15 +462,39 @@ return {
       -- when buffer has unsaved changes (e.g. freshly converted curl block)
       local function run(cmd)
         return function()
-          if vim.bo.modified then vim.cmd 'write' end
+          if vim.bo.modified then
+            vim.cmd 'write'
+          end
           vim.cmd(cmd)
         end
       end
-      vim.keymap.set('n', '<leader>hA', run 'HurlRunner',   { desc = 'Hurl: Run all requests' })
+      vim.keymap.set('n', '<leader>hA', run 'HurlRunner', { desc = 'Hurl: Run all requests' })
       vim.keymap.set('n', '<leader>ha', run 'HurlRunnerAt', { desc = 'Hurl: Run request at cursor' })
-      vim.keymap.set('n', '<leader>tv', run 'HurlVerbose',  { desc = 'Hurl: Run request verbose' })
+      vim.keymap.set('n', '<leader>tv', run 'HurlVerbose', { desc = 'Hurl: Run request verbose' })
       vim.keymap.set('n', '<leader>tm', '<cmd>HurlToggleMode<CR>', { desc = 'Hurl: Toggle split/popup mode' })
-      vim.keymap.set('v', '<leader>h',  ':HurlRunner<CR>',  { desc = 'Hurl: Run selection' })
+      vim.keymap.set('v', '<leader>h', ':HurlRunner<CR>', { desc = 'Hurl: Run selection' })
+      -- Refresh IAM token: pick env with vim.ui.select, write vars.env next to current file.
+      -- Cached in ~/.cache/juniper/tokens/<env>.token; reuses until expiry.
+      vim.keymap.set('n', '<leader>he', function()
+        local envs = { 'c2dev3', 'c2dev2', 'sdpreprod' }
+        vim.ui.select(envs, { prompt = 'Juniper env: ' }, function(env)
+          if not env then
+            return
+          end
+          local dir = vim.fn.expand '%:p:h'
+          local vars_path = dir .. '/vars.env'
+          local cmd = string.format('source ~/rcfiles/bin/juniper.sh && refreshHurlToken %s %s', env, vars_path)
+          vim.fn.jobstart({ 'bash', '-c', cmd }, {
+            on_exit = function(_, code)
+              if code == 0 then
+                vim.notify('Token ready for ' .. env .. ' → ' .. vars_path, vim.log.levels.INFO)
+              else
+                vim.notify('Token refresh failed for ' .. env, vim.log.levels.ERROR)
+              end
+            end,
+          })
+        end)
+      end, { desc = 'Hurl: Refresh IAM token (pick env)' })
     end,
   },
 }
