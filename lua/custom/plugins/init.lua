@@ -445,4 +445,32 @@ return {
     -- if the build fails for some reason.
     -- build = ':MdMath build'
   },
+  {
+    'jellydn/hurl.nvim',
+    dependencies = { 'MunifTanjim/nui.nvim', 'nvim-lua/plenary.nvim' },
+    ft = 'hurl',
+    config = function()
+      require('hurl').setup {
+        debug = false,
+        show_notification = false,
+        auto_close = false,
+        mode = 'split',
+        env_file = { 'vars.env' },
+        formatters = { json = { 'jq' } },
+      }
+      -- hurl reads the on-disk file, so save first to avoid entry-index mismatch
+      -- when buffer has unsaved changes (e.g. freshly converted curl block)
+      local function run(cmd)
+        return function()
+          if vim.bo.modified then vim.cmd 'write' end
+          vim.cmd(cmd)
+        end
+      end
+      vim.keymap.set('n', '<leader>hA', run 'HurlRunner',   { desc = 'Hurl: Run all requests' })
+      vim.keymap.set('n', '<leader>ha', run 'HurlRunnerAt', { desc = 'Hurl: Run request at cursor' })
+      vim.keymap.set('n', '<leader>tv', run 'HurlVerbose',  { desc = 'Hurl: Run request verbose' })
+      vim.keymap.set('n', '<leader>tm', '<cmd>HurlToggleMode<CR>', { desc = 'Hurl: Toggle split/popup mode' })
+      vim.keymap.set('v', '<leader>h',  ':HurlRunner<CR>',  { desc = 'Hurl: Run selection' })
+    end,
+  },
 }
