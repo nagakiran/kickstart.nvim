@@ -1267,7 +1267,7 @@ require('lazy').setup({
     },
     -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
     opts = {
-      ensure_installed = { 'bash', 'c', 'diff', 'html', 'json', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' },
+      ensure_installed = { 'bash', 'c', 'diff', 'html', 'hurl', 'json', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' },
       -- Autoinstall languages that are not installed
       -- Disabling for now as it throws an error when parser is not available like starlark for .bazel files
       auto_install = false,
@@ -1442,6 +1442,16 @@ vim.g.python3_host_prog = os.getenv 'HOME' .. '/.pyenv/versions/myenv/bin/python
 -- Load Avante custom keymappings
 require 'avante_config'
 require 'codecompanion_config'
+
+-- Convert current curl paragraph to .hurl format in-place
+-- Prereq: hurlfmt (ships with hurl) must be in PATH
+-- Browser dev tools export --data-raw which hurlfmt doesn't accept; sed fixes that first
+vim.keymap.set('n', '<leader>ch', [[vip:'<,'>!curl2hurl<CR>]], { desc = 'Convert curl paragraph to [H]url format' })
+vim.keymap.set('v', '<leader>ch', [[:'<,'>!curl2hurl<CR>]], { desc = 'Convert curl selection to [H]url format' })
+vim.keymap.set('n', '<leader>cH', [[vip:'<,'>!hurl2curl<CR>]], { desc = 'Convert hurl paragraph to curl format' })
+vim.keymap.set('v', '<leader>cH', [[:'<,'>!hurl2curl<CR>]], { desc = 'Convert hurl selection to curl format' })
+-- Refresh Juniper token — calls juniper_token() from .bash_aliases, writes to ~/patches/juniper/curl/vars.env
+vim.keymap.set('n', '<leader>ct', ':!source ~/.bash_aliases && juniper_token<CR>', { desc = 'Refresh Juniper [T]oken' })
 
 -- The line beneath this is called `modeline`. See `:help modeline`
 
