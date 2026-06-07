@@ -22,5 +22,6 @@ return {
     vim.keymap.set('n', '<leader>lL', '<cmd>FzfLua lines<CR>', { desc = 'FzfLua lines', nowait = true })
     vim.keymap.set('n', '<leader>lb', '<cmd>FzfLua buffers<CR>', { desc = 'FzfLua buffers', nowait = true })
     vim.keymap.set('n', '<leader>lg', '<cmd>FzfLua git_files<CR>', { desc = 'FzfLua git_files', nowait = true })
+    vim.keymap.set('n', '<leader>ls', '<cmd>FzfLua treesitter<CR>', { desc = 'FZF [L]ist [S]ymbols (treesitter)', nowait = true })
   end,
 }
