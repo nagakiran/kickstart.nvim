@@ -21,6 +21,7 @@ function! Z(...)
 endfunction
 
 imap <F2> <C-R>=strftime("%Y-%m-%d")<CR>
+imap <F3> <C-R>=strftime("%Y-%m-%d %H:%M:%S")<CR>
 " As Fn key is not sending properly from wireless keyboard
 imap <A-d> <C-R>=strftime("%Y-%m-%d")<CR>
 
