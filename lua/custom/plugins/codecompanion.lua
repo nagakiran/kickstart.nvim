@@ -26,7 +26,8 @@ return {
               return require('codecompanion.adapters').extend('copilot', {
                 schema = {
                   model = {
-                    default = 'claude-haiku-4.5',
+                    -- default = 'claude-haiku-4.5',
+                    default = 'claude-sonnet-4.6',
                   },
                 },
               })
