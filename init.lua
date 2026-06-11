@@ -426,6 +426,8 @@ require('lazy').setup({
         json = { 'prettierd', 'prettier', stop_after_first = true },
         jsonc = { 'prettierd', 'prettier', stop_after_first = true },
         less = { 'prettierd', 'prettier', stop_after_first = true },
+        -- goimports runs gofmt + organises imports in one pass
+        go = { 'goimports', stop_after_first = true },
       },
     },
   },
