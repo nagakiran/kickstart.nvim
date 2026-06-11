@@ -102,8 +102,12 @@ return {
         },
         eslint = {},
         ts_ls = {
-          root_dir = function(fname)
-            return require('lspconfig.util').find_git_ancestor(fname) or require('lspconfig.util').root_pattern('tsconfig.json', 'package.json')(fname)
+          -- Native (nvim 0.11) root_dir signature: (bufnr, on_dir). Prefer the git root
+          -- (single tsserver across the monorepo), else nearest tsconfig/package.json.
+          root_dir = function(bufnr, on_dir)
+            local fname = vim.api.nvim_buf_get_name(bufnr)
+            local dir = vim.fs.root(fname, '.git') or vim.fs.root(fname, { 'tsconfig.json', 'package.json' })
+            on_dir(dir or vim.fs.dirname(fname))
           end,
           init_options = {
             -- Need to use when specific tsconfig to be chosen like atom/stockscreener
@@ -111,8 +115,9 @@ return {
           },
         },
         jdtls = {
-          root_dir = function(fname)
-            return require('lspconfig.util').root_pattern '.classpath'(fname) or require('lspconfig.util').find_git_ancestor(fname) or vim.loop.os_homedir()
+          root_dir = function(bufnr, on_dir)
+            local fname = vim.api.nvim_buf_get_name(bufnr)
+            on_dir(vim.fs.root(fname, '.classpath') or vim.fs.root(fname, '.git') or vim.uv.os_homedir())
           end,
         },
         lua_ls = {
@@ -126,6 +131,16 @@ return {
         },
       }
 
+      -- nvim 0.11 + mason-lspconfig v2 dropped the `handlers` callback API: it auto-enables
+      -- installed servers via vim.lsp.enable() and reads each server's config from
+      -- vim.lsp.config[name]. So register capabilities globally ('*' merges into every server)
+      -- and push each server's overrides through the native vim.lsp.config(). (gopls is
+      -- configured + enabled separately above so we can pin its binary.)
+      vim.lsp.config('*', { capabilities = capabilities })
+      for name, cfg in pairs(servers) do
+        vim.lsp.config(name, cfg)
+      end
+
       require('mason').setup()
 
       local ensure_installed = vim.tbl_keys(servers or {})
@@ -134,15 +149,9 @@ return {
       })
       require('mason-tool-installer').setup { ensure_installed = ensure_installed }
 
-      require('mason-lspconfig').setup {
-        handlers = {
-          function(server_name)
-            local server = servers[server_name] or {}
-            server.capabilities = vim.tbl_deep_extend('force', {}, capabilities, server.capabilities or {})
-            require('lspconfig')[server_name].setup(server)
-          end,
-        },
-      }
+      -- Auto-installs + auto-enables the servers in `ensure_installed` using the configs
+      -- registered above via vim.lsp.config.
+      require('mason-lspconfig').setup {}
     end,
   },
 }
