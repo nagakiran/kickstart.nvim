@@ -96,3 +96,5 @@ EOF
 
 nnoremap <Leader>dd :lua execute_paragraph_with_exports()<CR>
 
+" let g:fugitive_git_executable = 'git -c status.showUntrackedFiles=no'
+" nnoremap <leader>gs :Git -c status.showUntrackedFiles=no<CR>

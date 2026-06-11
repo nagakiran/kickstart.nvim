@@ -27,7 +27,8 @@ return {
                 schema = {
                   model = {
                     -- default = 'claude-haiku-4.5',
-                    default = 'claude-sonnet-4.6',
+                    -- default = 'claude-sonnet-4.6',
+                    -- default = 'gpt-5.3-codex',
                   },
                 },
               })
