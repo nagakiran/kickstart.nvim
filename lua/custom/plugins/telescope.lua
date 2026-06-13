@@ -57,7 +57,14 @@ return {
             show_line = false,
           },
           lsp_references = {
-            fname_width = 80,
+            fname_width = 150,
+            layout_strategy = 'vertical',
+            layout_config = {
+              width = 0.95,
+              height = 0.85,
+              preview_height = 0.6,
+            },
+            path_display = { 'truncate' },
           },
           git_bcommits = {
             -- To show date also in bcommits
