@@ -96,5 +96,8 @@ EOF
 
 nnoremap <Leader>dd :lua execute_paragraph_with_exports()<CR>
 
+let g:taskwiki_urgent_days = 3 
+let g:taskwiki_soon_days = 7
+
 " let g:fugitive_git_executable = 'git -c status.showUntrackedFiles=no'
 " nnoremap <leader>gs :Git -c status.showUntrackedFiles=no<CR>

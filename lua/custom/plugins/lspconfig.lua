@@ -115,6 +115,15 @@ return {
           },
         },
         jdtls = {
+          cmd = function(config)
+            local root = config.root_dir or vim.uv.cwd()
+            local workspace = vim.fn.expand '~/.cache/jdtls/workspace/' .. root:gsub('[/\\]', '_')
+            return {
+              'jdtls',
+              '-configuration', vim.fn.expand '~/.cache/jdtls/config',
+              '-data', workspace,
+            }
+          end,
           root_dir = function(bufnr, on_dir)
             local fname = vim.api.nvim_buf_get_name(bufnr)
             on_dir(vim.fs.root(fname, '.classpath') or vim.fs.root(fname, '.git') or vim.uv.os_homedir())
