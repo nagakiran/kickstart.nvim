@@ -94,6 +94,14 @@ git clone https://github.com/nvim-lua/kickstart.nvim.git "${env:LOCALAPPDATA}\nv
 
 ### Post Installation
 
+Enable the pre-commit hook that auto-formats Lua files with `stylua` on every commit:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+This is a one-time step per clone. The hook itself is tracked in `.githooks/pre-commit`.
+
 Start Neovim
 
 ```sh
