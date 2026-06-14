@@ -193,8 +193,12 @@ vim.keymap.set('n', '<Esc>', '<cmd>nohlsearch<CR>')
 vim.keymap.set('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagnostic [Q]uickfix list' })
 -- Will be useful to look at diagnostic messages that spawn across a line [also for copying as virtual text can't be copied]
 vim.keymap.set('n', '<leader>df', vim.diagnostic.open_float, { desc = 'Open diagnostic [F]loat' })
-vim.keymap.set('n', ']e', function() vim.diagnostic.goto_next { severity = vim.diagnostic.severity.ERROR } end, { desc = 'Next [E]rror diagnostic' })
-vim.keymap.set('n', '[e', function() vim.diagnostic.goto_prev { severity = vim.diagnostic.severity.ERROR } end, { desc = 'Previous [E]rror diagnostic' })
+vim.keymap.set('n', ']e', function()
+  vim.diagnostic.goto_next { severity = vim.diagnostic.severity.ERROR }
+end, { desc = 'Next [E]rror diagnostic' })
+vim.keymap.set('n', '[e', function()
+  vim.diagnostic.goto_prev { severity = vim.diagnostic.severity.ERROR }
+end, { desc = 'Previous [E]rror diagnostic' })
 
 -- Exit terminal mode in the builtin terminal with a shortcut that is a bit easier
 -- for people to discover. Otherwise, you normally need to press <C-\><C-n>, which
