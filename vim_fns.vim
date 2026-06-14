@@ -96,6 +96,8 @@ EOF
 
 nnoremap <Leader>dd :lua execute_paragraph_with_exports()<CR>
 
+" autocmd bufwritepost ~/.config/kitty/kitty.conf :silent !kill -SIGUSR1 $(pgrep kitty)
+
 let g:taskwiki_urgent_days = 3 
 let g:taskwiki_soon_days = 7
 
