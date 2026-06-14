@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Format staged Lua files with stylua before committing.
+# Install: git config core.hooksPath .githooks
+
+set -euo pipefail
+
+# Collect staged .lua files (added, copied, modified)
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep '\.lua$' || true)
+
+if [ -z "$staged" ]; then
+  exit 0
+fi
+
+if ! command -v stylua &>/dev/null; then
+  echo "pre-commit: stylua not found on PATH; skipping Lua formatting."
+  exit 0
+fi
+
+echo "pre-commit: formatting staged Lua files with stylua..."
+# Format in place, then re-stage each file so the formatted version is committed
+for file in $staged; do
+  stylua "$file"
+  git add "$file"
+done
+echo "pre-commit: done."
