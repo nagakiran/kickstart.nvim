@@ -80,12 +80,15 @@ return {
             -- no .go files on disk. GOPACKAGESDRIVER tells gopls to use the Bazel-aware driver
             -- (built from @io_bazel_rules_go//go/tools/gopackagesdriver) which queries Bazel for
             -- package metadata instead. The driver gracefully falls back outside Bazel workspaces.
-            env = {
-              GOPACKAGESDRIVER = vim.fn.expand '~/go/bin/gopackagesdriver-wrapper',
+            env = vim.tbl_extend('force', {
               GOPRIVATE = 'eng-hs-gitlab.juniper.net',
               GONOSUMDB = 'eng-hs-gitlab.juniper.net',
               GONOPROXY = 'eng-hs-gitlab.juniper.net',
-            },
+            }, vim.uv.os_uname().sysname == 'Darwin' and {
+              -- Bazel-aware packages driver; needed on macOS where `go list` fails for
+              -- proto-generated packages not committed to the repo. Not required on Linux.
+              GOPACKAGESDRIVER = vim.fn.expand '~/go/bin/gopackagesdriver-wrapper',
+            } or {}),
           },
         },
       })
