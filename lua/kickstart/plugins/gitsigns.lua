@@ -32,6 +32,14 @@ return {
           end
         end, { desc = 'Jump to previous git [c]hange' })
 
+        map('n', ']C', function()
+          gitsigns.nav_hunk('next', { target = 'staged' })
+        end, { desc = 'Jump to next staged git [C]hange' })
+
+        map('n', '[C', function()
+          gitsigns.nav_hunk('prev', { target = 'staged' })
+        end, { desc = 'Jump to previous staged git [C]hange' })
+
         -- Actions
         -- visual mode
         map('v', '<leader>hs', function()
