@@ -3,7 +3,6 @@ return {
     'olimorris/codecompanion.nvim',
     dependencies = {
       'nvim-lua/plenary.nvim',
-      'nvim-treesitter/nvim-treesitter',
       'ravitemer/mcphub.nvim', -- Add MCPHub as dependency
       'ravitemer/codecompanion-history.nvim',
     },

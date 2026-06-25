@@ -230,9 +230,6 @@ return {
   {
     'Thiago4532/mdmath.nvim',
     enabled = false,
-    dependencies = {
-      'nvim-treesitter/nvim-treesitter',
-    },
     opts = {
       -- Filetypes that the plugin will be enabled by default.
       filetypes = { 'markdown' },
