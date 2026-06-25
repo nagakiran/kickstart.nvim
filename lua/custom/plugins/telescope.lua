@@ -2,7 +2,6 @@ return {
   { -- Fuzzy Finder (files, lsp, etc)
     'nvim-telescope/telescope.nvim',
     event = 'VimEnter',
-    branch = '0.1.x',
     dependencies = {
       'nvim-lua/popup.nvim',
       'nvim-lua/plenary.nvim',
@@ -127,7 +126,9 @@ return {
       vim.keymap.set('n', '<leader>sr', builtin.resume, { desc = '[S]earch [R]esume' })
       vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
       vim.keymap.set('n', '<leader>sj', builtin.jumplist, { desc = '[J]ump List entries' })
-      vim.keymap.set('n', '<leader>si', builtin.changelist, { desc = 'Change List entries [I]nsert mode' })
+      if builtin.changelist then
+        vim.keymap.set('n', '<leader>si', builtin.changelist, { desc = 'Change List entries [I]nsert mode' })
+      end
       vim.keymap.set('n', '<leader>sb', function()
         builtin.git_bcommits {
           attach_mappings = function(prompt_bufnr, map)

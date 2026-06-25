@@ -84,6 +84,13 @@ I hope you enjoy your Neovim journey,
 P.S. You can delete this when you're done too. It's your config now! :)
 --]]
 
+-- nvim 0.12 removed ft_to_lang; telescope 0.1.x still calls it
+if vim.treesitter.language and not vim.treesitter.language.ft_to_lang then
+  vim.treesitter.language.ft_to_lang = function(ft)
+    return vim.treesitter.language.get_lang(ft)
+  end
+end
+
 -- custom shell
 -- vim.o.shell = '/opt/homebrew/bin/bash --norc'
 
@@ -568,6 +575,7 @@ require('lazy').setup({
   },
 })
 vim.cmd [[
+  " syntax on
   autocmd BufRead,BufNewFile ~/textfiles/*.txt set filetype=markdown
 	" Need to add it explicitly as looks based markdown syntax file is not loaded automatically and treesitter/render-markdown syntax is getting loaded
 	autocmd FileType markdown source ~/.config/nvim/after/syntax/markdown.vim
@@ -671,28 +679,13 @@ vim.o.winbar = "%{expand('%:.')}" -- To show the file path just below tabbar
 
 vim.api.nvim_create_autocmd('FileType', {
   pattern = 'typescriptreact',
-  callback = function()
-    -- vim.treesitter.query.set(
-    --   'tsx',
-    --   'injections',
-    --   [[
-    --    ((comment) @injection.content
-    -- 			 (#match? @injection.content "^/\\*\\*")
-    --        (#set! injection.language "markdown")
-    --        (#set! injection.combined))
-    --  ]]
-    -- )
-    -- Override markdown highlights to ensure they show
-    -- vim.api.nvim_set_hl(0, '@markup.strong.markdown_inline', { bold = true, fg = 'Orange' })
-    -- vim.api.nvim_set_hl(0, '@markup.strong', { bold = true, fg = 'Orange' })
-    -- vim.api.nvim_set_hl(0, '@text.strong', { bold = true, fg = 'Orange' })
-
-    -- Enable markdown highlighting
-    -- vim.treesitter.start(0, 'markdown')
-
-    -- Try to enable render-markdown
-    -- if package.loaded['render-markdown'] then
-    --   require('render-markdown').enable()
-    -- end
-  end,
+  -- callback = function()
+  --   local buf = vim.api.nvim_get_current_buf()
+  --   -- Explicitly start treesitter with 'tsx' lang to bypass ft_to_lang lookup (broken in nvim 0.12).
+  --   -- Falls back to typescript vim syntax if the tsx parser is not installed.
+  --   local ok = pcall(vim.treesitter.start, buf, 'tsx')
+  --   if not ok then
+  --     vim.bo[buf].syntax = 'typescript'
+  --   end
+  -- end,
 })
