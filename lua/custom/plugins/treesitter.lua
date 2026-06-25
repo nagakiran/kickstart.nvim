@@ -1,10 +1,11 @@
 return {
-  { -- Highlight, edit, and navigate code
+  {
     'nvim-treesitter/nvim-treesitter',
+    branch = 'main',
     build = ':TSUpdate',
-    main = 'nvim-treesitter.configs',
+    main = 'nvim-treesitter',
     dependencies = {
-      { 'nvim-treesitter/nvim-treesitter-textobjects' },
+      { 'nvim-treesitter/nvim-treesitter-textobjects', branch = 'main' },
       {
         'nvim-treesitter/nvim-treesitter-context',
         opts = {
@@ -29,50 +30,20 @@ return {
           end
           vim.api.nvim_create_user_command('SetContextLines', function(args)
             set_context_lines(args.fargs[1])
-          end, { nargs = 1, desc = 'Set nvim-treesitter-context max_lines' })
+          end, { nargs = 1, desc = 'Set treesitter-context max_lines' })
         end,
       },
     },
-    opts = {
-      ensure_installed = {
-        'bash',
-        'c',
-        'diff',
-        'go',
-        'gomod',
-        'gowork',
-        'html',
-        'hurl',
-        'json',
-        'lua',
-        'luadoc',
-        'markdown',
-        'markdown_inline',
-        'query',
-        'vim',
-        'vimdoc',
-      },
-      auto_install = false,
-      highlight = {
-        enable = true,
-        disable = function(_, buf)
-          -- Check the 'large_buf' variable set on the buffer
-          return vim.b[buf].large_buf == true
+    init = function()
+      vim.api.nvim_create_autocmd('FileType', {
+        callback = function(args)
+          if vim.b[args.buf].large_buf then
+            return
+          end
+          pcall(vim.treesitter.start, args.buf)
+          vim.bo[args.buf].indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
         end,
-        additional_vim_regex_highlighting = { 'ruby' },
-      },
-      indent = { enable = true, disable = { 'ruby' } },
-      textobjects = {
-        swap = {
-          enable = true,
-          swap_next = {
-            ['<leader>ta'] = '[t]reesitter @parameter.inner',
-          },
-          swap_previous = {
-            ['<leader>tA'] = '[t]reesitter @parameter.inner',
-          },
-        },
-      },
-    },
+      })
+    end,
   },
 }
