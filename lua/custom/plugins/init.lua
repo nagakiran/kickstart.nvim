@@ -47,12 +47,12 @@ return {
           vim.b.venn_enabled = true
           vim.cmd [[setlocal ve=all]]
           -- draw a line on HJKL keystokes
-          vim.api.nvim_buf_set_keymap(0, 'n', 'J', '<C-v>j:VBox<CR>', { noremap = true })
-          vim.api.nvim_buf_set_keymap(0, 'n', 'K', '<C-v>k:VBox<CR>', { noremap = true })
-          vim.api.nvim_buf_set_keymap(0, 'n', 'L', '<C-v>l:VBox<CR>', { noremap = true })
-          vim.api.nvim_buf_set_keymap(0, 'n', 'H', '<C-v>h:VBox<CR>', { noremap = true })
+          vim.keymap.set('n', 'J', '<C-v>j:VBox<CR>', { noremap = true, buffer = 0 })
+          vim.keymap.set('n', 'K', '<C-v>k:VBox<CR>', { noremap = true, buffer = 0 })
+          vim.keymap.set('n', 'L', '<C-v>l:VBox<CR>', { noremap = true, buffer = 0 })
+          vim.keymap.set('n', 'H', '<C-v>h:VBox<CR>', { noremap = true, buffer = 0 })
           -- draw a box by pressing "f" with visual selection
-          vim.api.nvim_buf_set_keymap(0, 'v', 'f', ':VBox<CR>', { noremap = true })
+          vim.keymap.set('v', 'f', ':VBox<CR>', { noremap = true, buffer = 0 })
         else
           vim.cmd [[setlocal ve=]]
           vim.api.nvim_buf_del_keymap(0, 'n', 'J')
@@ -64,7 +64,7 @@ return {
         end
       end
       -- toggle keymappings for venn using <leader>v
-      vim.api.nvim_set_keymap('n', '<leader>zv', ':lua Toggle_venn()<CR>', { noremap = true })
+      vim.keymap.set('n', '<leader>zv', ':lua Toggle_venn()<CR>', { noremap = true })
     end,
   },
   {
@@ -205,7 +205,7 @@ return {
         group = group,
         pattern = '*',
         callback = function()
-          local buftype = vim.api.nvim_buf_get_option(0, 'buftype')
+          local buftype = vim.bo[0].buftype
           if vim.tbl_contains({ 'help', 'nofile', 'terminal', 'fugitive' }, buftype) then
             vim.b.rooter_silent_chdir = 1
           end

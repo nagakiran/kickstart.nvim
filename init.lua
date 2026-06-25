@@ -629,7 +629,7 @@ end
 
 -- Mapping to copy all messages to clipboard
 vim.keymap.set('n', '<leader>mc', function()
-  local messages = vim.api.nvim_exec('messages', true)
+  local messages = vim.api.nvim_exec2('messages', { output = true }).output
   vim.fn.setreg('+', messages)
   vim.notify('Messages copied to clipboard!', vim.log.levels.INFO)
 end, { desc = 'Copy :messages to clipboard' })
