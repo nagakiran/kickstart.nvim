@@ -5,6 +5,7 @@ return {
     cmd = { 'DiffviewOpen', 'DiffviewClose', 'DiffviewFileHistory' },
     keys = {
       { '<leader>dF', desc = 'Juniper: open diff file in 2-way vimdiff' },
+      { '<leader>dL', desc = 'Juniper: open feature-branch file in new tab' },
       { '<leader>dJ', desc = 'Juniper: DiffviewOpen for stored branches' },
       { '<leader>dq', desc = 'Diffview: close panel' },
     },
@@ -37,6 +38,10 @@ return {
         vim.bo.bufhidden = 'wipe'
         vim.bo.swapfile = false
         vim.cmd('file ' .. vim.fn.fnamemodify(file, ':t') .. '[base]')
+        local ft = vim.filetype.match { filename = file }
+        if ft then
+          vim.bo.filetype = ft
+        end
         vim.cmd 'diffthis'
 
         -- right pane: feature branch
@@ -47,12 +52,45 @@ return {
         vim.bo.bufhidden = 'wipe'
         vim.bo.swapfile = false
         vim.cmd('file ' .. vim.fn.fnamemodify(file, ':t') .. '[feat]')
+        if ft then
+          vim.bo.filetype = ft
+        end
         vim.cmd 'diffthis'
 
         vim.cmd 'windo normal! gg'
       end
 
-      -- <leader>df  in raw diff buffer: open file at cursor in 2-way vimdiff (new tab)
+      local function open_feat_file()
+        local feat = vim.env.JUNIPER_FEATURE_BRANCH
+        if not feat or feat == '' then
+          vim.notify('Run juniper_branch_diff first (sets JUNIPER_FEATURE_BRANCH)', vim.log.levels.WARN)
+          return
+        end
+        local lnum = vim.fn.search('^+++ b/', 'bcnW')
+        if lnum == 0 then
+          vim.notify("Not inside a file diff block (no '+++ b/' line above cursor)", vim.log.levels.WARN)
+          return
+        end
+        local file = vim.fn.getline(lnum):gsub('^%+%+%+ b/', '')
+
+        vim.cmd 'tabnew'
+        vim.cmd('read !git show ' .. vim.fn.shellescape(feat .. ':' .. file))
+        vim.cmd 'normal! gg"_dd'
+        vim.bo.buftype = 'nofile'
+        vim.bo.bufhidden = 'wipe'
+        vim.bo.swapfile = false
+        vim.cmd('file ' .. vim.fn.fnamemodify(file, ':t') .. '[feat]')
+        local ft = vim.filetype.match { filename = file }
+        if ft then
+          vim.bo.filetype = ft
+        end
+        vim.cmd 'normal! gg'
+      end
+
+      -- <leader>df  in raw diff buffer: open feature-branch file in new tab (no diff mode)
+      vim.keymap.set('n', '<leader>dL', open_feat_file, { desc = 'Juniper: open feature-branch file in new tab' })
+
+      -- <leader>dF  in raw diff buffer: open file at cursor in 2-way vimdiff (new tab)
       vim.keymap.set('n', '<leader>dF', open_diff_file, { desc = 'Juniper: open diff file in 2-way vimdiff' })
 
       -- <leader>dJ  open DiffviewOpen panel for the stored Juniper branches
