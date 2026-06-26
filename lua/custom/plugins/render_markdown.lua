@@ -27,7 +27,7 @@ return {
     --     },
     --   },
     -- },
-    ft = { 'markdown', 'Avante', 'codecompanion', 'typescriptreact' },
+    ft = { 'markdown', 'Avante', 'codecompanion', 'typescriptreact', 'gitcommit' },
     config = function()
       require('render-markdown').setup {
         anti_conceal = {
@@ -52,7 +52,7 @@ return {
         },
         html = { enabled = false },
         render_modes = { 'n', 'c', 't', 'i' },
-        file_types = { 'markdown', 'typescriptreact', 'Avante', 'codecompanion' },
+        file_types = { 'markdown', 'typescriptreact', 'Avante', 'codecompanion', 'gitcommit' },
         injections = {
           typescriptreact = {
             enabled = true,
@@ -60,6 +60,19 @@ return {
 									((comment) @injection.content
                     (#set! injection.language "markdown"))
 								]],
+          },
+          -- Render markdown in the commit message body when writing a commit
+          -- (filetype `gitcommit`). `message_line` nodes are the body lines;
+          -- `injection.combined` joins them into one markdown document so
+          -- multi-line constructs (code fences, lists) render, while the
+          -- `# ...` comment lines (separate `comment` nodes) stay untouched.
+          gitcommit = {
+            enabled = true,
+            query = [[
+              ((message_line) @injection.content
+                (#set! injection.combined)
+                (#set! injection.language "markdown"))
+            ]],
           },
         },
         overrides = {
