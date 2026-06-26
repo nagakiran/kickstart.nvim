@@ -58,6 +58,11 @@ return {
         lualine_x = {
           {
             function()
+              return require('custom.wakatime').component()
+            end,
+          },
+          {
+            function()
               return vim.fn.getcwd()
             end,
           },
@@ -82,5 +87,6 @@ return {
       extensions = {},
     }
     require('lualine').setup(config)
+    require('custom.wakatime').start()
   end,
 }
