@@ -31,6 +31,19 @@ return {
                     default = 'gpt-5.4',
                   },
                 },
+                handlers = {
+                  -- GPT-5 / o1 reasoning models on Copilot reject `max_tokens` and require
+                  -- `max_completion_tokens`. The upstream form_parameters is a no-op, so we
+                  -- replace it and remap the key for those models only.
+                  form_parameters = function(self, params, messages)
+                    local model = params.model
+                    if params.max_tokens and type(model) == 'string' and (vim.startswith(model, 'gpt-5') or vim.startswith(model, 'o1')) then
+                      params.max_completion_tokens = params.max_tokens
+                      params.max_tokens = nil
+                    end
+                    return params
+                  end,
+                },
               })
             end,
           },
