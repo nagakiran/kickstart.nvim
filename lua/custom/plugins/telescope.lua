@@ -124,19 +124,31 @@ return {
       vim.keymap.set('n', '<leader>sb', function()
         builtin.git_bcommits {
           attach_mappings = function(prompt_bufnr, map)
+            -- Return the lines of `file` at git revision `rev`, or nil on failure.
+            -- `git show <rev>:<path>` resolves <path> relative to the REPO ROOT, so run git
+            -- inside the file's own directory and use a './'-prefixed pathspec. This is robust
+            -- to Neovim's cwd not matching the repo root (vim-rooter, multiple buffers, etc.).
+            local function git_file_lines(rev, file)
+              local dir = vim.fn.fnamemodify(file, ':p:h')
+              local base = vim.fn.fnamemodify(file, ':t')
+              local content = vim.fn.systemlist { 'git', '-C', dir, 'show', rev .. ':./' .. base }
+              if vim.v.shell_error ~= 0 then
+                return nil
+              end
+              return content
+            end
+
             -- Helper: open a diff view between the selected commit and its parent.
             -- `split_cmd` controls how the OLD buffer is placed (vertical / horizontal).
             local function diff_commit(split_cmd)
               local selection = action_state.get_selected_entry()
               actions.close(prompt_bufnr) -- close telescope before opening new windows
-              local relative_path = vim.fn.fnamemodify(selection.current_file, ':.') -- path relative to cwd
 
               -- Create a scratch buffer populated with `git show <rev>:<file>` output.
               -- `prefix` is used in the buffer name to label it NEW or OLD.
               local function create_git_buf(rev, prefix)
-                local cmd = string.format('git show %s:%s', rev, relative_path)
-                local content = vim.fn.systemlist(cmd) -- run git and capture output lines
-                if vim.v.shell_error ~= 0 then
+                local content = git_file_lines(rev, selection.current_file) -- file contents at `rev`
+                if not content then
                   return nil -- git command failed (e.g. file didn't exist at that rev)
                 end
                 local bufnr = vim.api.nvim_create_buf(false, true) -- unlisted, scratch buffer
@@ -171,17 +183,14 @@ return {
               local selection = action_state.get_selected_entry()
               actions.close(prompt_bufnr)
 
-              local relative_path = vim.fn.fnamemodify(selection.current_file, ':.')
-
               vim.cmd 'tabnew'
               local new_buf = vim.api.nvim_get_current_buf()
 
               -- Retrieve the file contents at the exact commit SHA
-              local cmd = string.format('git show %s:%s', selection.value, relative_path)
-              local content = vim.fn.systemlist(cmd)
+              local content = git_file_lines(selection.value, selection.current_file)
 
-              if vim.v.shell_error ~= 0 then
-                vim.api.nvim_err_writeln 'Failed to fetch git content'
+              if not content then
+                vim.notify('Failed to fetch git content', vim.log.levels.ERROR)
                 return
               end
 
