@@ -27,6 +27,8 @@ return {
     config = function()
       local actions = require 'telescope.actions'
       local action_state = require 'telescope.actions.state'
+      local previewers = require 'telescope.previewers'
+      local putils = require 'telescope.previewers.utils'
 
       -- [[ Configure Telescope ]]
       -- See `:help telescope` and `:help telescope.setup()`
@@ -120,15 +122,70 @@ return {
       if builtin.changelist then
         vim.keymap.set('n', '<leader>si', builtin.changelist, { desc = 'Change List entries [I]nsert mode' })
       end
+      -- Build a `git show`-style buffer previewer for the bcommits pickers. Runs git inside
+      -- the file's own directory (-C <dir>) so it is robust to cwd/repo-root mismatch
+      -- (vim-rooter, multiple buffers, etc.).
+      --   title  preview window title
+      --   args   function(rev, base) -> git args appended after `git -C <dir> --no-pager`
+      --   ft     filetype used for syntax highlighting
+      local function commit_previewer(title, args, ft)
+        return previewers.new_buffer_previewer {
+          title = title,
+          get_buffer_by_name = function(_, entry)
+            return entry.value
+          end,
+          define_preview = function(self, entry)
+            local file = entry.current_file
+            local dir = vim.fn.fnamemodify(file, ':p:h')
+            local base = vim.fn.fnamemodify(file, ':t')
+            local cmd = vim.list_extend({ 'git', '-C', dir, '--no-pager' }, args(entry.value, base))
+            putils.job_maker(cmd, self.state.bufnr, {
+              value = entry.value,
+              bufname = self.state.bufname,
+              cwd = dir,
+              callback = function(bufnr)
+                if vim.api.nvim_buf_is_valid(bufnr) then
+                  putils.highlighter(bufnr, ft)
+                end
+              end,
+            })
+          end,
+        }
+      end
+
+      -- Previewer list for the bcommits pickers. Cycle with <C-Space>/<M-Space>.
+      -- Default = full commit message + this file's diff; then message-only, then diff-only.
+      local function bcommits_previewers()
+        return {
+          commit_previewer('Message + File Diff', function(rev, base)
+            return { 'show', rev, '--', base }
+          end, 'diff'),
+          commit_previewer('Commit Message', function(rev)
+            return { 'log', '-n', '1', rev }
+          end, 'git'),
+          commit_previewer('File Diff to Parent', function(rev, base)
+            return { 'show', '--format=', rev, '--', base } -- --format= suppresses the message header
+          end, 'diff'),
+        }
+      end
+
       -- Shared picker mappings for the buffer-commit pickers (git_bcommits and
       -- git_bcommits_range). Both use the same entry maker, so `selection.value` (sha)
       -- and `selection.current_file` are available in either picker.
+      -- The preview shows the full commit message (author/date/subject/body) followed by
+      -- this file's diff; cycle the preview with <C-Space>/<M-Space>.
       -- Keybindings inside the picker:
-      --   <CR>         → send all listed commits to the quickfix list
-      --   <C-t>        → open the file snapshot at the selected commit in a new tab
-      --   <C-v>        → side-by-side (vertical) diff of the commit vs its parent
-      --   <C-x>        → stacked (horizontal) diff of the commit vs its parent
+      --   <CR>           → send all listed commits to the quickfix list
+      --   <C-t>          → open the file snapshot at the selected commit in a new tab
+      --   <C-v>          → side-by-side (vertical) diff of the commit vs its parent
+      --   <C-x>          → stacked (horizontal) diff of the commit vs its parent
+      --   <C-Space>      → cycle preview: message+diff → message → diff (→ back)
+      --   <M-Space>      → cycle preview the other way
       local function bcommits_attach_mappings(prompt_bufnr, map)
+        -- Cycle between the combined / message-only / diff-only previewers.
+        map({ 'i', 'n' }, '<C-Space>', actions.cycle_previewers_next)
+        map({ 'i', 'n' }, '<M-Space>', actions.cycle_previewers_prev)
+
         -- Return the lines of `file` at git revision `rev`, or nil on failure.
         -- `git show <rev>:<path>` resolves <path> relative to the REPO ROOT, so run git
         -- inside the file's own directory and use a './'-prefixed pathspec. This is robust
@@ -232,14 +289,14 @@ return {
 
       -- Normal mode: all commits that touched the current buffer.
       vim.keymap.set('n', '<leader>sb', function()
-        builtin.git_bcommits { attach_mappings = bcommits_attach_mappings }
+        builtin.git_bcommits { attach_mappings = bcommits_attach_mappings, previewer = bcommits_previewers() }
       end, { desc = '[S]earch [B]uffer Git Commits' })
 
       -- Visual mode: only commits that touched the SELECTED line range (git log -L).
       -- A plain Lua callback keeps visual mode active during execution, so
       -- git_bcommits_range picks up the selection via mode()/line "v".
       vim.keymap.set('x', '<leader>sb', function()
-        builtin.git_bcommits_range { attach_mappings = bcommits_attach_mappings }
+        builtin.git_bcommits_range { attach_mappings = bcommits_attach_mappings, previewer = bcommits_previewers() }
       end, { desc = '[S]earch [B]uffer Git Commits (selected range)' })
 
       vim.keymap.set('n', '<leader>sc', builtin.git_commits, { desc = 'Git [C]ommits' })
