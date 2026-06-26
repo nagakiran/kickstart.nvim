@@ -42,7 +42,7 @@ return {
           map('<leader>ph', vim.lsp.buf.hover, 'LS[P] [H]over')
 
           local client = vim.lsp.get_client_by_id(event.data.client_id)
-          if client and client.supports_method(vim.lsp.protocol.Methods.textDocument_inlayHint) then
+          if client and client:supports_method(vim.lsp.protocol.Methods.textDocument_inlayHint) then
             map('<leader>th', function()
               vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled { bufnr = event.buf })
             end, '[T]oggle Inlay [H]ints')
@@ -123,8 +123,10 @@ return {
             local workspace = vim.fn.expand '~/.cache/jdtls/workspace/' .. root:gsub('[/\\]', '_')
             return {
               'jdtls',
-              '-configuration', vim.fn.expand '~/.cache/jdtls/config',
-              '-data', workspace,
+              '-configuration',
+              vim.fn.expand '~/.cache/jdtls/config',
+              '-data',
+              workspace,
             }
           end,
           root_dir = function(bufnr, on_dir)

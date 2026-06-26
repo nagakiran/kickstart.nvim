@@ -1,20 +1,24 @@
 -- Create an autocommand group for LSP-related commands
 local lsp_group = vim.api.nvim_create_augroup('CustomLSP', { clear = true })
 
--- Autocommand to disable LSP for large buffers
+-- Autocommand to disable LSP for large buffers and special filetypes
 vim.api.nvim_create_autocmd('LspAttach', {
   group = lsp_group,
   callback = function(args)
     local buffer = args.buf
+    local client_id = args.data.client_id
     -- Check if large_buf is set for this buffer
     if vim.b[buffer].large_buf then
-      -- Get the client ID that just attached
-      local client_id = args.data.client_id
-      -- Detach the LSP client from this buffer
       vim.lsp.buf_detach_client(buffer, client_id)
-
-      -- Optional: Show a notification that LSP was disabled
       vim.notify(string.format('LSP disabled for large buffer: %s', vim.fn.bufname(buffer)), vim.log.levels.INFO)
+    end
+    -- Detach non-Copilot LSP clients from taskwarrior edit buffers; willSaveWaitUntil
+    -- rewrites the buffer before disk write and strips user-added annotations
+    if vim.bo[buffer].filetype == 'taskedit' then
+      local client = vim.lsp.get_client_by_id(client_id)
+      if client and client.name ~= 'copilot' then
+        vim.lsp.buf_detach_client(buffer, client_id)
+      end
     end
   end,
 })
@@ -32,6 +36,31 @@ vim.api.nvim_create_user_command('FollowSymLink', function()
   vim.cmd('file ' .. resolved_path)
   vim.cmd 'edit'
 end, {})
+
+-- Taskwarrior edit files require annotation continuation lines indented to exactly 21
+-- spaces. nvim-treesitter's indentexpr + noexpandtab inserts tabs instead, which
+-- taskwarrior cannot parse, so annotations are silently dropped. Force space-based,
+-- treesitter-free indentation for these buffers.
+autocmd('FileType', {
+  pattern = 'taskedit',
+  callback = function()
+    vim.opt_local.expandtab = true -- spaces, never tabs
+    vim.opt_local.indentexpr = '' -- disable nvim-treesitter indentexpr
+    vim.opt_local.autoindent = false -- start new lines clean; user spaces to col 21
+    vim.opt_local.softtabstop = 0
+  end,
+})
+
+-- Bypass LSP willSaveWaitUntil for taskwarrior edit files by taking over the write directly.
+-- willSaveWaitUntil fires as part of Neovim's normal write path and rewrites the buffer,
+-- stripping user-added annotations. BufWriteCmd skips that path entirely.
+autocmd('BufWriteCmd', {
+  pattern = '*.task',
+  callback = function(args)
+    vim.fn.writefile(vim.api.nvim_buf_get_lines(args.buf, 0, -1, false), args.file)
+    vim.bo[args.buf].modified = false
+  end,
+})
 
 -- [ ] Seeing LSP errors while editing file may be some LSP events are registered even before disabling it
 -- autocmd('BufReadPre', {
