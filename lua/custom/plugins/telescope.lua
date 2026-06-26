@@ -6,7 +6,6 @@ return {
       'nvim-lua/popup.nvim',
       'nvim-lua/plenary.nvim',
       'nvim-telescope/telescope-media-files.nvim',
-      'debugloop/telescope-undo.nvim',
       { -- If encountering errors, see telescope-fzf-native README for installation instructions
         'nvim-telescope/telescope-fzf-native.nvim',
 
@@ -28,7 +27,6 @@ return {
     config = function()
       local actions = require 'telescope.actions'
       local action_state = require 'telescope.actions.state'
-      local undo_actions = require 'telescope-undo.actions'
 
       -- [[ Configure Telescope ]]
       -- See `:help telescope` and `:help telescope.setup()`
@@ -80,17 +78,6 @@ return {
             find_cmd = 'rg',
             preview_cmd = 'imgcat',
           },
-          undo = {
-            side_by_side = true,
-            layout_strategy = 'vertical',
-            layout_config = {
-              preview_height = 0.8,
-            },
-            saved_only = true,
-            mappings = {
-              i = {},
-            },
-          },
           ['ui-select'] = {
             require('telescope.themes').get_dropdown(),
           },
@@ -100,7 +87,6 @@ return {
       -- Enable Telescope extensions if they are installed
       pcall(require('telescope').load_extension, 'fzf')
       pcall(require('telescope').load_extension, 'ui-select')
-      pcall(require('telescope').load_extension, 'undo')
       pcall(require('telescope').load_extension, 'media_files')
 
       -- See `:help telescope.builtin`
@@ -220,7 +206,7 @@ return {
       end, { desc = '[S]earch [B]uffer Git Commits' })
 
       vim.keymap.set('n', '<leader>sc', builtin.git_commits, { desc = 'Git [C]ommits' })
-      vim.keymap.set('n', '<leader>su', '<cmd>Telescope undo<cr>')
+      vim.keymap.set('n', '<leader>su', '<cmd>Atone<cr>', { desc = '[S]earch [U]ndo tree (atone)' })
 
       -- To search from git root directory instead of current directory
       vim.keymap.set('n', '<leader>sG', function()
