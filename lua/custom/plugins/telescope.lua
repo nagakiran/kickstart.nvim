@@ -67,6 +67,11 @@ return {
             -- To show date also in bcommits
             git_command = { 'git', 'log', '--pretty=%h %ad %an %s', '--abbrev-commit', '--date=short' },
           },
+          git_bcommits_range = {
+            -- Same date/author format as git_bcommits. Must include --no-patch and END with
+            -- `-L` so Telescope can append the `<from>,<to>:<file>` line-range argument.
+            git_command = { 'git', 'log', '--pretty=%h %ad %an %s', '--abbrev-commit', '--date=short', '--no-patch', '-L' },
+          },
           git_commits = {
             -- To show date/author name also in bcommits
             git_command = { 'git', 'log', '--pretty=%h %ad %an %s', '--abbrev-commit', '--date=short' },
@@ -115,117 +120,127 @@ return {
       if builtin.changelist then
         vim.keymap.set('n', '<leader>si', builtin.changelist, { desc = 'Change List entries [I]nsert mode' })
       end
-      -- <leader>sb: Browse git commits for the current buffer (git bcommits).
+      -- Shared picker mappings for the buffer-commit pickers (git_bcommits and
+      -- git_bcommits_range). Both use the same entry maker, so `selection.value` (sha)
+      -- and `selection.current_file` are available in either picker.
       -- Keybindings inside the picker:
       --   <CR>         → send all listed commits to the quickfix list
       --   <C-t>        → open the file snapshot at the selected commit in a new tab
       --   <C-v>        → side-by-side (vertical) diff of the commit vs its parent
       --   <C-x>        → stacked (horizontal) diff of the commit vs its parent
+      local function bcommits_attach_mappings(prompt_bufnr, map)
+        -- Return the lines of `file` at git revision `rev`, or nil on failure.
+        -- `git show <rev>:<path>` resolves <path> relative to the REPO ROOT, so run git
+        -- inside the file's own directory and use a './'-prefixed pathspec. This is robust
+        -- to Neovim's cwd not matching the repo root (vim-rooter, multiple buffers, etc.).
+        local function git_file_lines(rev, file)
+          local dir = vim.fn.fnamemodify(file, ':p:h')
+          local base = vim.fn.fnamemodify(file, ':t')
+          local content = vim.fn.systemlist { 'git', '-C', dir, 'show', rev .. ':./' .. base }
+          if vim.v.shell_error ~= 0 then
+            return nil
+          end
+          return content
+        end
+
+        -- Helper: open a diff view between the selected commit and its parent.
+        -- `split_cmd` controls how the OLD buffer is placed (vertical / horizontal).
+        local function diff_commit(split_cmd)
+          local selection = action_state.get_selected_entry()
+          actions.close(prompt_bufnr) -- close telescope before opening new windows
+
+          -- Create a scratch buffer populated with `git show <rev>:<file>` output.
+          -- `prefix` is used in the buffer name to label it NEW or OLD.
+          local function create_git_buf(rev, prefix)
+            local content = git_file_lines(rev, selection.current_file) -- file contents at `rev`
+            if not content then
+              return nil -- git command failed (e.g. file didn't exist at that rev)
+            end
+            local bufnr = vim.api.nvim_create_buf(false, true) -- unlisted, scratch buffer
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, content)
+            vim.bo[bufnr].filetype = vim.filetype.match { filename = selection.current_file } or '' -- preserve syntax highlighting
+            vim.bo[bufnr].buftype = 'nofile' -- not backed by a real file
+            vim.bo[bufnr].bufhidden = 'wipe' -- auto-delete when hidden
+            -- Name format: NEW:<sha7>:<filename>  or  OLD:<sha7>:<filename>
+            vim.api.nvim_buf_set_name(bufnr, prefix .. ':' .. selection.value:sub(1, 7) .. ':' .. vim.fn.fnamemodify(selection.current_file, ':t'))
+            return bufnr
+          end
+
+          local buf_new = create_git_buf(selection.value, 'NEW') -- the selected commit
+          local buf_old = create_git_buf(selection.value .. '^', 'OLD') -- its parent commit (^ suffix)
+
+          if not buf_new then
+            vim.api.nvim_err_writeln 'Failed to fetch commit content'
+            return
+          end
+
+          vim.cmd 'tabnew' -- open a fresh tab for the diff
+          vim.api.nvim_set_current_buf(buf_new) -- load NEW side into the tab
+          vim.cmd 'diffthis' -- mark NEW as a diff window
+          if buf_old then
+            vim.cmd(split_cmd .. ' ' .. buf_old) -- open OLD in a split next to NEW
+            vim.cmd 'diffthis' -- mark OLD as a diff window
+          end
+        end
+
+        -- 1. <C-t>: Open the file snapshot at the selected commit in a new tab (no diff)
+        actions.select_tab:replace(function()
+          local selection = action_state.get_selected_entry()
+          actions.close(prompt_bufnr)
+
+          vim.cmd 'tabnew'
+          local new_buf = vim.api.nvim_get_current_buf()
+
+          -- Retrieve the file contents at the exact commit SHA
+          local content = git_file_lines(selection.value, selection.current_file)
+
+          if not content then
+            vim.notify('Failed to fetch git content', vim.log.levels.ERROR)
+            return
+          end
+
+          vim.api.nvim_buf_set_lines(new_buf, 0, -1, false, content)
+
+          vim.bo[new_buf].buftype = 'nofile' -- read-only scratch buffer
+          vim.bo[new_buf].bufhidden = 'wipe' -- clean up when the tab is closed
+          vim.bo[new_buf].filetype = vim.filetype.match { filename = selection.current_file } or ''
+
+          -- Name the buffer <sha7>:<filename> for easy identification in the tabline
+          local short_sha = selection.value:sub(1, 7)
+          local filename = vim.fn.fnamemodify(selection.current_file, ':t')
+          vim.api.nvim_buf_set_name(new_buf, short_sha .. ':' .. filename)
+        end)
+
+        -- 2. <C-v>: Diff the selected commit against its parent in a vertical split
+        actions.select_vertical:replace(function()
+          diff_commit 'leftabove vert sbuffer'
+        end)
+
+        -- 3. <C-x>: Diff the selected commit against its parent in a horizontal split
+        actions.select_horizontal:replace(function()
+          diff_commit 'belowright sbuffer'
+        end)
+
+        -- 4. <CR>: Send all commits shown in the picker to the quickfix list
+        actions.select_default:replace(function()
+          actions.send_to_qflist(prompt_bufnr) -- populate quickfix
+          actions.open_qflist(prompt_bufnr) -- and jump to it
+        end)
+
+        return true -- signal that mappings were successfully attached
+      end
+
+      -- Normal mode: all commits that touched the current buffer.
       vim.keymap.set('n', '<leader>sb', function()
-        builtin.git_bcommits {
-          attach_mappings = function(prompt_bufnr, map)
-            -- Return the lines of `file` at git revision `rev`, or nil on failure.
-            -- `git show <rev>:<path>` resolves <path> relative to the REPO ROOT, so run git
-            -- inside the file's own directory and use a './'-prefixed pathspec. This is robust
-            -- to Neovim's cwd not matching the repo root (vim-rooter, multiple buffers, etc.).
-            local function git_file_lines(rev, file)
-              local dir = vim.fn.fnamemodify(file, ':p:h')
-              local base = vim.fn.fnamemodify(file, ':t')
-              local content = vim.fn.systemlist { 'git', '-C', dir, 'show', rev .. ':./' .. base }
-              if vim.v.shell_error ~= 0 then
-                return nil
-              end
-              return content
-            end
-
-            -- Helper: open a diff view between the selected commit and its parent.
-            -- `split_cmd` controls how the OLD buffer is placed (vertical / horizontal).
-            local function diff_commit(split_cmd)
-              local selection = action_state.get_selected_entry()
-              actions.close(prompt_bufnr) -- close telescope before opening new windows
-
-              -- Create a scratch buffer populated with `git show <rev>:<file>` output.
-              -- `prefix` is used in the buffer name to label it NEW or OLD.
-              local function create_git_buf(rev, prefix)
-                local content = git_file_lines(rev, selection.current_file) -- file contents at `rev`
-                if not content then
-                  return nil -- git command failed (e.g. file didn't exist at that rev)
-                end
-                local bufnr = vim.api.nvim_create_buf(false, true) -- unlisted, scratch buffer
-                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, content)
-                vim.bo[bufnr].filetype = vim.filetype.match { filename = selection.current_file } or '' -- preserve syntax highlighting
-                vim.bo[bufnr].buftype = 'nofile' -- not backed by a real file
-                vim.bo[bufnr].bufhidden = 'wipe' -- auto-delete when hidden
-                -- Name format: NEW:<sha7>:<filename>  or  OLD:<sha7>:<filename>
-                vim.api.nvim_buf_set_name(bufnr, prefix .. ':' .. selection.value:sub(1, 7) .. ':' .. vim.fn.fnamemodify(selection.current_file, ':t'))
-                return bufnr
-              end
-
-              local buf_new = create_git_buf(selection.value, 'NEW') -- the selected commit
-              local buf_old = create_git_buf(selection.value .. '^', 'OLD') -- its parent commit (^ suffix)
-
-              if not buf_new then
-                vim.api.nvim_err_writeln 'Failed to fetch commit content'
-                return
-              end
-
-              vim.cmd 'tabnew' -- open a fresh tab for the diff
-              vim.api.nvim_set_current_buf(buf_new) -- load NEW side into the tab
-              vim.cmd 'diffthis' -- mark NEW as a diff window
-              if buf_old then
-                vim.cmd(split_cmd .. ' ' .. buf_old) -- open OLD in a split next to NEW
-                vim.cmd 'diffthis' -- mark OLD as a diff window
-              end
-            end
-
-            -- 1. <C-t>: Open the file snapshot at the selected commit in a new tab (no diff)
-            actions.select_tab:replace(function()
-              local selection = action_state.get_selected_entry()
-              actions.close(prompt_bufnr)
-
-              vim.cmd 'tabnew'
-              local new_buf = vim.api.nvim_get_current_buf()
-
-              -- Retrieve the file contents at the exact commit SHA
-              local content = git_file_lines(selection.value, selection.current_file)
-
-              if not content then
-                vim.notify('Failed to fetch git content', vim.log.levels.ERROR)
-                return
-              end
-
-              vim.api.nvim_buf_set_lines(new_buf, 0, -1, false, content)
-
-              vim.bo[new_buf].buftype = 'nofile' -- read-only scratch buffer
-              vim.bo[new_buf].bufhidden = 'wipe' -- clean up when the tab is closed
-              vim.bo[new_buf].filetype = vim.filetype.match { filename = selection.current_file } or ''
-
-              -- Name the buffer <sha7>:<filename> for easy identification in the tabline
-              local short_sha = selection.value:sub(1, 7)
-              local filename = vim.fn.fnamemodify(selection.current_file, ':t')
-              vim.api.nvim_buf_set_name(new_buf, short_sha .. ':' .. filename)
-            end)
-
-            -- 2. <C-v>: Diff the selected commit against its parent in a vertical split
-            actions.select_vertical:replace(function()
-              diff_commit 'leftabove vert sbuffer'
-            end)
-
-            -- 3. <C-x>: Diff the selected commit against its parent in a horizontal split
-            actions.select_horizontal:replace(function()
-              diff_commit 'belowright sbuffer'
-            end)
-
-            -- 4. <CR>: Send all commits shown in the picker to the quickfix list
-            actions.select_default:replace(function()
-              actions.send_to_qflist(prompt_bufnr) -- populate quickfix
-              actions.open_qflist(prompt_bufnr) -- and jump to it
-            end)
-
-            return true -- signal that mappings were successfully attached
-          end,
-        }
+        builtin.git_bcommits { attach_mappings = bcommits_attach_mappings }
       end, { desc = '[S]earch [B]uffer Git Commits' })
+
+      -- Visual mode: only commits that touched the SELECTED line range (git log -L).
+      -- A plain Lua callback keeps visual mode active during execution, so
+      -- git_bcommits_range picks up the selection via mode()/line "v".
+      vim.keymap.set('x', '<leader>sb', function()
+        builtin.git_bcommits_range { attach_mappings = bcommits_attach_mappings }
+      end, { desc = '[S]earch [B]uffer Git Commits (selected range)' })
 
       vim.keymap.set('n', '<leader>sc', builtin.git_commits, { desc = 'Git [C]ommits' })
       vim.keymap.set('n', '<leader>su', '<cmd>Atone<cr>', { desc = '[S]earch [U]ndo tree (atone)' })
