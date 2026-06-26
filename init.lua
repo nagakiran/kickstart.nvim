@@ -104,6 +104,7 @@ vim.g.maplocalleader = ';'
 -- Not needed as switching to dracula theme in iTerm2
 -- vim.opt.background = 'light'
 vim.opt.background = 'dark'
+vim.opt.termguicolors = true
 -- To prevent Neovim from wrapping lines within a word
 vim.opt.linebreak = true
 
@@ -407,6 +408,10 @@ require('lazy').setup({
     opts = {
       notify_on_error = false,
       format_on_save = function(bufnr)
+        -- LSP formatting corrupts taskwarrior annotation lines in the edit file
+        if vim.bo[bufnr].filetype == 'taskedit' then
+          return nil
+        end
         -- Disable "format_on_save lsp_fallback" for languages that don't
         -- have a well standardized coding style. You can add additional
         -- languages here or re-enable it for the disabled ones.
@@ -677,15 +682,15 @@ vim.keymap.set('n', '<leader>ct', ':!source ~/.bash_aliases && juniper_token<CR>
 vim.api.nvim_set_hl(0, 'RenderMarkdownInlineHighlight', { fg = '#E39AA6', bg = '#1a190c', bold = true })
 vim.o.winbar = "%{expand('%:.')}" -- To show the file path just below tabbar
 
-vim.api.nvim_create_autocmd('FileType', {
-  pattern = 'typescriptreact',
-  -- callback = function()
-  --   local buf = vim.api.nvim_get_current_buf()
-  --   -- Explicitly start treesitter with 'tsx' lang to bypass ft_to_lang lookup (broken in nvim 0.12).
-  --   -- Falls back to typescript vim syntax if the tsx parser is not installed.
-  --   local ok = pcall(vim.treesitter.start, buf, 'tsx')
-  --   if not ok then
-  --     vim.bo[buf].syntax = 'typescript'
-  --   end
-  -- end,
-})
+-- vim.api.nvim_create_autocmd('FileType', {
+--   pattern = 'typescriptreact',
+--   -- callback = function()
+--   --   local buf = vim.api.nvim_get_current_buf()
+--   --   -- Explicitly start treesitter with 'tsx' lang to bypass ft_to_lang lookup (broken in nvim 0.12).
+--   --   -- Falls back to typescript vim syntax if the tsx parser is not installed.
+--   --   local ok = pcall(vim.treesitter.start, buf, 'tsx')
+--   --   if not ok then
+--   --     vim.bo[buf].syntax = 'typescript'
+--   --   end
+--   -- end,
+-- })
