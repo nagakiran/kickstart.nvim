@@ -165,7 +165,15 @@ return {
 
       -- Auto-installs + auto-enables the servers in `ensure_installed` using the configs
       -- registered above via vim.lsp.config.
-      require('mason-lspconfig').setup {}
+      -- stylua is a formatter (used via conform.nvim), not a language server. nvim-lspconfig now
+      -- ships an lsp/stylua.lua (cmd = {'stylua','--lsp'}) and mason-lspconfig auto-enables every
+      -- installed Mason package that maps to a server — so it tries to start our formatter binary as
+      -- an LSP, which fails ("--lsp" unsupported, exit code 2). Exclude it from automatic_enable.
+      require('mason-lspconfig').setup {
+        automatic_enable = {
+          exclude = { 'stylua' },
+        },
+      }
     end,
   },
 }
