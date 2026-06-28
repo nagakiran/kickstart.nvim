@@ -153,13 +153,39 @@ return {
         }
       end
 
+      -- Default bcommits preview: commit message + `--stat` file list (all files in the
+      -- commit) + this file's diff. Runs git in the file's own dir for cwd-robustness.
+      -- A single `git` invocation can't produce both the all-file stat and the focused
+      -- diff, so this runs two commands and concatenates them (unlike commit_previewer).
+      local function commit_stat_diff_previewer()
+        return previewers.new_buffer_previewer {
+          title = 'Stat + File Diff',
+          get_buffer_by_name = function(_, entry)
+            return entry.value
+          end,
+          define_preview = function(self, entry)
+            local file = entry.current_file
+            local dir = vim.fn.fnamemodify(file, ':p:h')
+            local base = vim.fn.fnamemodify(file, ':t')
+            local rev = entry.value
+            -- `git show --stat` => message header + changed-files summary (all files)
+            local stat = vim.fn.systemlist { 'git', '-C', dir, '--no-pager', 'show', '--stat', rev }
+            -- `--format=` suppresses the message so we don't repeat the header
+            local diff = vim.fn.systemlist { 'git', '-C', dir, '--no-pager', 'show', '--format=', rev, '--', base }
+            local lines = vim.list_extend(stat, { '' })
+            vim.list_extend(lines, diff)
+            vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
+            putils.highlighter(self.state.bufnr, 'git')
+          end,
+        }
+      end
+
       -- Previewer list for the bcommits pickers. Cycle with <C-Space>/<M-Space>.
-      -- Default = full commit message + this file's diff; then message-only, then diff-only.
+      -- Default = commit message + all-file stat + this file's diff; then message-only,
+      -- then diff-only.
       local function bcommits_previewers()
         return {
-          commit_previewer('Message + File Diff', function(rev, base)
-            return { 'show', rev, '--', base }
-          end, 'diff'),
+          commit_stat_diff_previewer(),
           commit_previewer('Commit Message', function(rev)
             return { 'log', '-n', '1', rev }
           end, 'git'),
@@ -177,14 +203,37 @@ return {
       -- Keybindings inside the picker:
       --   <CR>           → send all listed commits to the quickfix list
       --   <C-t>          → open the file snapshot at the selected commit in a new tab
+      --   <C-d>          → open the full commit diff (all files) in a scratch buffer/new tab
       --   <C-v>          → side-by-side (vertical) diff of the commit vs its parent
       --   <C-x>          → stacked (horizontal) diff of the commit vs its parent
-      --   <C-Space>      → cycle preview: message+diff → message → diff (→ back)
+      --   <C-Space>      → cycle preview: stat+diff → message → diff (→ back)
       --   <M-Space>      → cycle preview the other way
       local function bcommits_attach_mappings(prompt_bufnr, map)
         -- Cycle between the combined / message-only / diff-only previewers.
         map({ 'i', 'n' }, '<C-Space>', actions.cycle_previewers_next)
         map({ 'i', 'n' }, '<M-Space>', actions.cycle_previewers_prev)
+
+        -- <C-d>: open the WHOLE commit's diff (all files) in a scratch buffer in a new tab.
+        -- NOTE: this overrides telescope's default <C-d> (preview_scrolling_down) for these
+        -- pickers; <C-u> (scroll up) and the other defaults remain.
+        map({ 'i', 'n' }, '<C-d>', function()
+          local selection = action_state.get_selected_entry()
+          actions.close(prompt_bufnr)
+          local dir = vim.fn.fnamemodify(selection.current_file, ':p:h')
+          local rev = selection.value
+          local content = vim.fn.systemlist { 'git', '-C', dir, '--no-pager', 'show', rev }
+          if vim.v.shell_error ~= 0 then
+            vim.notify('Failed to fetch commit diff', vim.log.levels.ERROR)
+            return
+          end
+          vim.cmd 'tabnew'
+          local buf = vim.api.nvim_get_current_buf()
+          vim.api.nvim_buf_set_lines(buf, 0, -1, false, content)
+          vim.bo[buf].buftype = 'nofile' -- not backed by a real file
+          vim.bo[buf].bufhidden = 'wipe' -- clean up when the tab is closed
+          vim.bo[buf].filetype = 'git' -- highlights message + multi-file diff
+          vim.api.nvim_buf_set_name(buf, 'COMMIT:' .. rev:sub(1, 7))
+        end)
 
         -- Return the lines of `file` at git revision `rev`, or nil on failure.
         -- `git show <rev>:<path>` resolves <path> relative to the REPO ROOT, so run git
@@ -312,13 +361,26 @@ return {
         builtin.live_grep(opts)
       end, { desc = '[S]earch by [G]rep from git root' })
 
-      -- Grep within a specific subdirectory (prompts for path with tab-completion)
+      -- Grep within a sub-directory chosen via an fzf-lua picker, rooted at the git root
+      -- (robust to cwd != repo root under vim-rooter). Falls back to cwd if not in a repo.
       vim.keymap.set('n', '<leader>sD', function()
-        local dir = vim.fn.input('Search dir: ', '', 'dir')
-        if dir == '' then
-          return
+        local out = vim.fn.systemlist { 'git', '-C', vim.fn.expand '%:p:h', 'rev-parse', '--show-toplevel' }
+        local root = out[1]
+        if vim.v.shell_error ~= 0 or not root or root == '' then
+          root = vim.fn.getcwd()
         end
-        builtin.live_grep { search_dirs = { dir } }
+        require('fzf-lua').fzf_exec('fd --type d --hidden --exclude .git', {
+          prompt = 'Grep dir> ',
+          cwd = root,
+          actions = {
+            ['default'] = function(selected)
+              if not selected or not selected[1] then
+                return
+              end
+              builtin.live_grep { search_dirs = { root .. '/' .. selected[1] } }
+            end,
+          },
+        })
       end, { desc = '[S]earch in sub[D]irectory' })
 
       vim.keymap.set('n', '<leader>/', function()
