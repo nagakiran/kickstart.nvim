@@ -22,6 +22,7 @@
   "fidget.nvim": { "branch": "main", "commit": "6f793b2bcd2d35e201c09520f698bb763220908a" },
   "fugitive-gitlab.vim": { "branch": "master", "commit": "3584cf7e607ba7822f991d407a8d780e05aae287" },
   "fzf-lua": { "branch": "main", "commit": "b9919229c84bd64d8539367e67e32811cf39a836" },
+  "git-conflict.nvim": { "branch": "main", "commit": "4bbfdd92d547d2862a75b4e80afaf30e73f7bbb4" },
   "gitsigns.nvim": { "branch": "main", "commit": "2038c666bd9d8a0b7349a0b6ee00dc83104b9ecf" },
   "gruvbox": { "branch": "master", "commit": "5d15b2765f59754d7ac263c88a0f6e3e58124951" },
   "hurl.nvim": { "branch": "main", "commit": "0e5430d5130fe95fc1b8b015491b50274aa2e796" },
