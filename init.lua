@@ -428,6 +428,14 @@ require('lazy').setup({
           lsp_format = lsp_format_opt,
         }
       end,
+      formatters = {
+        -- Resolve directly from the pyenv venv; PATH resolves isort/black
+        -- via pyenv shims which fall back to the "system" python version
+        -- (no isort/black there) and burn ~1.3s each scanning all pyenv
+        -- versions before failing, adding 2.6s+ to every python save.
+        isort = { command = '/Users/nagakiran/.pyenv/versions/myenv/bin/isort' },
+        black = { command = '/Users/nagakiran/.pyenv/versions/myenv/bin/black' },
+      },
       formatters_by_ft = {
         lua = { 'stylua' },
         -- Conform can also run multiple formatters sequentially
