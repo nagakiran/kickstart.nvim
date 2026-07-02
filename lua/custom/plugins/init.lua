@@ -9,6 +9,19 @@ return {
     event = 'VimEnter',
     dependencies = { 'vimwiki/vimwiki' },
     opts = {},
+    init = function()
+      -- Must run before vimwiki's own plugin/vimwiki.vim loads (which calls
+      -- vimwiki#vars#init() at source time), otherwise these globals are read
+      -- too late and vimwiki falls back to global_ext=1 defaults for every
+      -- .md/.wiki file on disk.
+      vim.g.vimwiki_list = {
+        {
+          path = '~/textfiles/wiki/',
+          ext = '.wiki',
+        },
+      }
+      vim.g.vimwiki_global_ext = 0
+    end,
     config = function()
       vim.g.taskwiki_extra_warriors = {
         D = { data_location = '~/textfiles/tasks/demattasks/', taskrc_location = '~/rcfiles/.demattaskrc' },
