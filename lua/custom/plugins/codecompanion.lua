@@ -162,7 +162,7 @@ return {
             },
           },
           history = {
-            enabled = false,
+            enabled = true,
             opts = {
               default_buf_title = '[CodeCompanion] ', -- No special characters
               -- Keymap to open history from chat buffer (default: gh)
