@@ -64,7 +64,39 @@ return {
       return vim.uv.fs_realpath(path) or vim.fn.fnamemodify(path, ':p')
     end
 
-    vim.keymap.set('i', '<C-x><C-f>', function()
+    -- Precomputed once: raw byte constants for the two control keys involved.
+    local CTRL_X = vim.api.nvim_replace_termcodes('<C-x>', true, false, true) -- 0x18
+    local CTRL_F = vim.api.nvim_replace_termcodes('<C-f>', true, false, true) -- 0x06
+
+    vim.keymap.set('i', '<C-x>', function()
+      -- Peek the very next raw keystroke synchronously -- no dependency on
+      -- 'timeoutlen'. Mapping the literal 2-key sequence `<C-x><C-f>` would
+      -- race Neovim's own timeoutlen: if the two keys don't land within that
+      -- window, Neovim falls back to its native i_CTRL-X_* completion
+      -- submode instead of firing our mapping. Intercepting `<C-x>` alone
+      -- and resolving the next key ourselves is deterministic regardless of
+      -- typing speed.
+      local ok, key = pcall(vim.fn.getcharstr)
+      if not ok then
+        -- Interrupted (<C-c>) or read error: bail out cleanly, same as
+        -- native Vim abandoning a pending <C-x> submode on interrupt.
+        return
+      end
+
+      if key ~= CTRL_F then
+        -- Not our chord: replay <C-x> + whatever was actually typed so
+        -- native <C-x> submode dispatch (^P/^N/^O/^L, <Esc> to cancel,
+        -- etc.) runs exactly as if we were never here.
+        --   'n' -- noremap, only to avoid recursing back into THIS mapping
+        --         (native <C-x> submodes are hardcoded, not keymap-table
+        --         entries, so this doesn't hide them).
+        --   'i' -- insert at front of typeahead, not append, so this
+        --         replay is processed before any keys the user already
+        --         typed ahead (fast typists), preserving input order.
+        vim.api.nvim_feedkeys(CTRL_X .. key, 'ni', false)
+        return
+      end
+
       local bufnr = vim.api.nvim_get_current_buf()
       local row, col = unpack(vim.api.nvim_win_get_cursor(0))
       vim.cmd 'stopinsert'
@@ -96,6 +128,6 @@ return {
           },
         }
       end)
-    end, { desc = 'Fuzzy-find file and insert path at cursor' })
+    end, { desc = 'Fuzzy-find file and insert path at cursor (or native <C-x>... completion)' })
   end,
 }
