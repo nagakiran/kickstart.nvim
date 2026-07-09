@@ -348,7 +348,224 @@ return {
         builtin.git_bcommits_range { attach_mappings = bcommits_attach_mappings, previewer = bcommits_previewers() }
       end, { desc = '[S]earch [B]uffer Git Commits (selected range)' })
 
-      vim.keymap.set('n', '<leader>sc', builtin.git_commits, { desc = 'Git [C]ommits' })
+      -- Resolve the git root for the current buffer, falling back to cwd if the buffer
+      -- isn't inside a repo (e.g. an empty/scratch buffer). Shared by the git_commits
+      -- filters below and mirrors the resolution already used by <leader>sD/<leader>sG.
+      local function git_root_for_current_buffer()
+        local out = vim.fn.systemlist { 'git', '-C', vim.fn.expand '%:p:h', 'rev-parse', '--show-toplevel' }
+        local root = out[1]
+        if vim.v.shell_error ~= 0 or not root or root == '' then
+          root = vim.fn.getcwd()
+        end
+        return root
+      end
+
+      -- Build the git_commits `git_command` for the given filters. Base format matches the
+      -- setup()-level default (pickers.git_commits.git_command); flags are appended only when set.
+      local function build_git_commits_command(filters)
+        local cmd = { 'git', 'log', '--pretty=%h %ad %an %s', '--abbrev-commit', '--date=short' }
+        if filters.author then
+          table.insert(cmd, '--author=' .. filters.author)
+        end
+        if filters.since then
+          table.insert(cmd, '--since=' .. filters.since)
+        end
+        if filters.until_ then
+          table.insert(cmd, '--until=' .. filters.until_)
+        end
+        if filters.reverse then
+          table.insert(cmd, '--reverse')
+        end
+        if filters.no_merges then
+          table.insert(cmd, '--no-merges')
+        end
+        if filters.extra then
+          for _, token in ipairs(vim.split(filters.extra, '%s+', { trimempty = true })) do
+            table.insert(cmd, token)
+          end
+        end
+        if filters.dir then
+          table.insert(cmd, '--')
+          table.insert(cmd, filters.dir)
+        end
+        return cmd
+      end
+
+      -- Render active filters + a key hint into the prompt title so the mappings are discoverable.
+      local function git_commits_title(filters)
+        local parts = {}
+        if filters.dir then
+          table.insert(parts, 'dir=' .. filters.dir)
+        end
+        if filters.author then
+          table.insert(parts, 'author=' .. filters.author)
+        end
+        if filters.since then
+          table.insert(parts, 'since=' .. filters.since)
+        end
+        if filters.until_ then
+          table.insert(parts, 'until=' .. filters.until_)
+        end
+        if filters.no_merges then
+          table.insert(parts, 'no-merges')
+        end
+        if filters.extra then
+          table.insert(parts, 'extra=' .. filters.extra)
+        end
+        table.insert(parts, filters.reverse and 'oldest first' or 'newest first')
+        local hint = 'M-a author · M-s since · M-u until · M-d dir · M-m merges · M-x extra · M-o order · M-r reset'
+        return string.format('Git Commits (%s)  [%s]', table.concat(parts, ', '), hint)
+      end
+
+      -- Compute a repo-root-relative pathspec for the current buffer's directory, used to
+      -- default <leader>sc to "commits touching this directory" instead of the whole repo.
+      -- Symlink-resolved (matches lua/custom/plugins/fzf.lua's vim.uv.fs_realpath usage) so
+      -- macOS's /tmp <-> /private/tmp style symlinks don't break the prefix comparison.
+      local function default_dir_filter(root)
+        if vim.bo.buftype ~= '' then
+          return nil
+        end
+        local buf_dir = vim.fn.expand '%:p:h'
+        if buf_dir == '' then
+          return nil
+        end
+        local resolved_root = vim.uv.fs_realpath(root) or root
+        local resolved_dir = vim.uv.fs_realpath(buf_dir) or buf_dir
+        if resolved_dir == resolved_root then
+          return nil
+        end
+        if resolved_dir:sub(1, #resolved_root + 1) == resolved_root .. '/' then
+          return resolved_dir:sub(#resolved_root + 2)
+        end
+        return nil
+      end
+
+      -- Open git_commits scoped to `filters`; <M-a/s/u/o/r> refine-in-place by closing and
+      -- recursively reopening with updated filters (git_commits' finder is a one-shot job, so
+      -- there is no live/dynamic refinement -- reopening is the only way to change the git command).
+      local function open_git_commits(filters)
+        filters = filters or {}
+        local root = git_root_for_current_buffer()
+        builtin.git_commits {
+          cwd = root,
+          git_command = build_git_commits_command(filters),
+          prompt_title = git_commits_title(filters),
+          attach_mappings = function(prompt_bufnr, map)
+            map({ 'i', 'n' }, '<M-a>', function()
+              actions.close(prompt_bufnr)
+              local lines = vim.fn.systemlist { 'git', 'shortlog', '-sne', '--all' }
+              local items = {}
+              for _, line in ipairs(lines) do
+                local count, who = line:match '^%s*(%d+)\t(.+)$'
+                if who then
+                  table.insert(items, { count = tonumber(count), who = who })
+                end
+              end
+              vim.ui.select(items, {
+                prompt = 'Filter commits by author',
+                format_item = function(item)
+                  return string.format('%-4d %s', item.count, item.who)
+                end,
+              }, function(choice)
+                local new_filters = vim.tbl_extend('force', {}, filters)
+                new_filters.author = choice and choice.who or new_filters.author
+                open_git_commits(new_filters)
+              end)
+            end)
+
+            map({ 'i', 'n' }, '<M-s>', function()
+              actions.close(prompt_bufnr)
+              vim.ui.input({ prompt = 'Since (e.g. 2024-01-01, "2 weeks ago"): ', default = filters.since or '' }, function(value)
+                local new_filters = vim.tbl_extend('force', {}, filters)
+                if value ~= nil then
+                  new_filters.since = value ~= '' and value or nil
+                end
+                open_git_commits(new_filters)
+              end)
+            end)
+
+            map({ 'i', 'n' }, '<M-u>', function()
+              actions.close(prompt_bufnr)
+              vim.ui.input({ prompt = 'Until (e.g. 2024-06-01, "yesterday"): ', default = filters.until_ or '' }, function(value)
+                local new_filters = vim.tbl_extend('force', {}, filters)
+                if value ~= nil then
+                  new_filters.until_ = value ~= '' and value or nil
+                end
+                open_git_commits(new_filters)
+              end)
+            end)
+
+            -- Generic escape hatch for any git log flag not covered by a dedicated mapping
+            -- above (e.g. -Sfoo pickaxe count, -Gregex pickaxe regex, --grep=foo, --all-match).
+            -- Stored as the raw typed string (not pre-split) so re-opening this prompt shows
+            -- exactly what was last entered; tokenized into argv elements in build_git_commits_command.
+            map({ 'i', 'n' }, '<M-x>', function()
+              actions.close(prompt_bufnr)
+              vim.ui.input({
+                prompt = 'Extra git log flags (space-separated, e.g. -Sfoo, -Gregex, --grep=foo, --all-match): ',
+                default = filters.extra or '',
+              }, function(value)
+                local new_filters = vim.tbl_extend('force', {}, filters)
+                if value ~= nil then
+                  new_filters.extra = value ~= '' and value or nil
+                end
+                open_git_commits(new_filters)
+              end)
+            end)
+
+            map({ 'i', 'n' }, '<M-o>', function()
+              actions.close(prompt_bufnr)
+              local new_filters = vim.tbl_extend('force', {}, filters)
+              new_filters.reverse = not filters.reverse
+              open_git_commits(new_filters)
+            end)
+
+            map({ 'i', 'n' }, '<M-m>', function()
+              actions.close(prompt_bufnr)
+              local new_filters = vim.tbl_extend('force', {}, filters)
+              new_filters.no_merges = not filters.no_merges
+              open_git_commits(new_filters)
+            end)
+
+            -- Pick a directory (fd + fzf-lua, mirrors <leader>sD) to scope commits to. Doesn't
+            -- close the telescope prompt until a selection is made, so cancelling fzf (<Esc>)
+            -- leaves the current picker/filters untouched instead of dropping out entirely.
+            map({ 'i', 'n' }, '<M-d>', function()
+              require('fzf-lua').fzf_exec('{ printf ".\\n"; fd --type d --hidden --exclude .git; }', {
+                prompt = 'Filter commits by directory> ',
+                cwd = root,
+                actions = {
+                  ['default'] = function(selected)
+                    if not selected or not selected[1] then
+                      return
+                    end
+                    actions.close(prompt_bufnr)
+                    local new_filters = vim.tbl_extend('force', {}, filters)
+                    if selected[1] == '.' then
+                      new_filters.dir = nil
+                    else
+                      new_filters.dir = selected[1]
+                    end
+                    open_git_commits(new_filters)
+                  end,
+                },
+              })
+            end)
+
+            map({ 'i', 'n' }, '<M-r>', function()
+              actions.close(prompt_bufnr)
+              open_git_commits {}
+            end)
+
+            return true
+          end,
+        }
+      end
+
+      vim.keymap.set('n', '<leader>sc', function()
+        local root = git_root_for_current_buffer()
+        open_git_commits { dir = default_dir_filter(root) }
+      end, { desc = 'Git [C]ommits (current dir)' })
       vim.keymap.set('n', '<leader>su', '<cmd>Atone<cr>', { desc = '[S]earch [U]ndo tree (atone)' })
 
       -- To search from git root directory instead of current directory
