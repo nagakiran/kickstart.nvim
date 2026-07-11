@@ -232,6 +232,26 @@ vim.keymap.set('t', '<Esc><Esc>', '<C-\\><C-n>', { desc = 'Exit terminal mode' }
 -- vim.keymap.set('n', '<C-j>', '<C-w><C-j>', { desc = 'Move focus to the lower window' })
 -- vim.keymap.set('n', '<C-k>', '<C-w><C-k>', { desc = 'Move focus to the upper window' })
 
+-- Smart paste: characterwise register ending with \n pastes as a new line (linewise)
+local function smart_paste(key)
+  local reg = vim.v.register == '' and '"' or vim.v.register
+  local content = vim.fn.getreg(reg)
+  local reg_type = vim.fn.getregtype(reg)
+  if reg_type == 'v' and content:sub(-1) == '\n' then
+    vim.fn.setreg(reg, content, 'l')
+    vim.cmd('normal! ' .. (vim.v.register == '' and '' or '"' .. vim.v.register) .. key)
+    vim.fn.setreg(reg, content, 'v')
+  else
+    vim.cmd('normal! ' .. (vim.v.register == '' and '' or '"' .. vim.v.register) .. key)
+  end
+end
+vim.keymap.set('n', 'p', function()
+  smart_paste 'p'
+end, { desc = 'Smart paste below' })
+vim.keymap.set('n', 'P', function()
+  smart_paste 'P'
+end, { desc = 'Smart paste above' })
+
 -- [[ Basic Autocommands ]]
 --  See `:help lua-guide-autocommands`
 
