@@ -746,3 +746,27 @@ local python_path = '/home/nagakirank/.venvs/testenv/bin/python'
 if vim.fn.filereadable(python_path) == 1 then
   vim.g.python3_host_prog = python_path
 end
+if vim.env.TMUX then
+  vim.g.clipboard = {
+    name = 'tmux',
+    copy = {
+      ['+'] = 'tmux load-buffer -',
+      ['*'] = 'tmux load-buffer -',
+    },
+    paste = {
+      ['+'] = 'tmux save-buffer -',
+      ['*'] = 'tmux save-buffer -',
+    },
+    cache_enabled = 0,
+  }
+  vim.opt.clipboard = 'unnamedplus'
+end
+
+vim.api.nvim_create_autocmd('TextYankPost', {
+  callback = function()
+    local copy_to_unnamedplus = require('vim.ui.clipboard.osc52').copy '+'
+    copy_to_unnamedplus(vim.v.event.regcontents)
+    local copy_to_unnamed = require('vim.ui.clipboard.osc52').copy '*'
+    copy_to_unnamed(vim.v.event.regcontents)
+  end,
+})
