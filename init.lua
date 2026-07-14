@@ -710,6 +710,8 @@ vim.keymap.set('n', '<leader>ct', ':!source ~/.bash_aliases && juniper_token<CR>
 vim.api.nvim_set_hl(0, 'RenderMarkdownInlineHighlight', { fg = '#E39AA6', bg = '#1a190c', bold = true })
 vim.o.winbar = "%{expand('%:.')}" -- To show the file path just below tabbar
 
+-- Copy as rich text (<leader>cf / <leader>cx) lives in lua/custom/plugins/render_markdown.lua
+
 -- vim.api.nvim_create_autocmd('FileType', {
 --   pattern = 'typescriptreact',
 --   -- callback = function()
