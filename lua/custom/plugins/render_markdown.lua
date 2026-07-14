@@ -91,6 +91,53 @@ return {
         require('render-markdown').setup { anti_conceal = { enabled = new_state } }
         vim.notify('Markdown Anti-Conceal: ' .. (new_state and 'Enabled' or 'Disabled'))
       end, { desc = 'Toggle Render-Markdown Anti-Conceal' })
+
+      -- Copy markdown to the clipboard as rich text, so it can be pasted into Outlook,
+      -- Confluence or Teams with formatting intact. What render-markdown draws is virtual
+      -- text and cannot be yanked, so the markdown *source* is what gets converted.
+      -- The script puts RTF (for native apps) and HTML (for web/Electron apps) on the
+      -- pasteboard at once, plus the raw markdown as the plain-text flavor.
+      local rich_text_script = vim.fs.joinpath(vim.fn.stdpath 'config', 'scripts', 'md-to-rich-clipboard.sh')
+
+      vim.api.nvim_create_user_command('CopyRichText', function(opts)
+        local lines = vim.api.nvim_buf_get_lines(0, opts.line1 - 1, opts.line2, false)
+        local tmp = vim.fn.tempname() .. '.md'
+        vim.fn.writefile(lines, tmp)
+        vim.system({ rich_text_script, tmp }, { text = true }, function(result)
+          vim.schedule(function()
+            os.remove(tmp)
+            if result.code == 0 then
+              vim.notify(('Copied %d line%s as rich text'):format(#lines, #lines == 1 and '' or 's'))
+            else
+              local err = (result.stderr ~= nil and result.stderr ~= '') and result.stderr or ('exited with ' .. result.code)
+              vim.notify('CopyRichText failed: ' .. err, vim.log.levels.ERROR)
+            end
+          end)
+        end)
+      end, { range = '%', desc = 'Copy markdown as rich text (Outlook/Confluence/Teams)' })
+
+      local rich_text_filetypes = { 'markdown', 'codecompanion', 'Avante', 'gitcommit' }
+
+      local function map_rich_text(buf)
+        vim.keymap.set('n', '<leader>cf', '<Cmd>CopyRichText<CR>', { buffer = buf, desc = 'Copy [F]ile as rich text' })
+        -- `:` rather than `<Cmd>` so Vim prefills the '<,'> range from the selection
+        vim.keymap.set('x', '<leader>cx', ':CopyRichText<CR>', { buffer = buf, desc = 'Copy selection as rich text' })
+      end
+
+      vim.api.nvim_create_autocmd('FileType', {
+        pattern = rich_text_filetypes,
+        callback = function(args)
+          map_rich_text(args.buf)
+        end,
+      })
+
+      -- This plugin lazy-loads on the filetypes above, so FileType has already fired for the
+      -- buffer that triggered the load; the autocmd alone would miss that first buffer.
+      for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.tbl_contains(rich_text_filetypes, vim.bo[buf].filetype) then
+          map_rich_text(buf)
+        end
+      end
     end,
   },
 }
