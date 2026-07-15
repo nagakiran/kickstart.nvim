@@ -45,6 +45,21 @@ return {
                 },
               })
             end,
+            anthropic = function()
+              return require('codecompanion.adapters').extend('anthropic', {
+                env = {
+                  -- Explicitly ensures it pulls from your system environment variable
+                  -- api_key = os.getenv 'ANTHROPIC_API_KEY',
+                  api_key = '***REMOVED***',
+                },
+                schema = {
+                  model = {
+                    -- Sets your default Claude model for new interactions
+                    default = 'claude-sonnet-4.6',
+                  },
+                },
+              })
+            end,
           },
           -- acp = {
           --   claude_code = function()
