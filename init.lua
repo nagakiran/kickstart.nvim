@@ -273,7 +273,13 @@ vim.api.nvim_create_autocmd('TextYankPost', {
 -- Add this autocmd to clear virtual text on mode changes
 vim.api.nvim_create_autocmd({ 'InsertLeave', 'BufLeave' }, {
   callback = function()
-    require('copilot.suggestion').dismiss()
+    if vim.g.disable_copilot_lua then
+      return
+    end
+    local ok, suggestion = pcall(require, 'copilot.suggestion')
+    if ok then
+      suggestion.dismiss()
+    end
   end,
 })
 

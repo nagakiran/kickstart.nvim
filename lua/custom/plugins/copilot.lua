@@ -2,6 +2,9 @@ return {
   {
     'zbirenbaum/copilot.lua',
     cmd = 'Copilot',
+    enabled = function()
+      return not vim.g.disable_copilot_lua
+    end,
     event = 'InsertEnter',
     config = function()
       require('copilot').setup {
@@ -58,7 +61,9 @@ return {
   },
   {
     'zbirenbaum/copilot-cmp',
-    enabled = false,
+    enabled = function()
+      return not vim.g.disable_copilot_lua
+    end,
     after = { 'copilot.lua' },
     config = function()
       require('copilot_cmp').setup()
@@ -66,13 +71,15 @@ return {
   },
   {
     'supermaven-inc/supermaven-nvim',
-    enabled = false,
+    enabled = function()
+      return vim.g.disable_copilot_lua == true
+    end,
     config = function()
       require('supermaven-nvim').setup {
         keymaps = {
           accept_suggestion = '<m-tab>',
           clear_suggestion = '<m-k>',
-          accept_word = '<m-j>',
+          accept_word = '<m-w>',
         },
         ignore_filetypes = { cpp = true },
         disable_inline_completion = false,

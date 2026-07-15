@@ -1,0 +1,4 @@
+-- Copy to lua/local_config.lua (gitignored) for machine-specific overrides.
+
+-- Set true to disable zbirenbaum/copilot.lua + copilot-cmp and use supermaven-nvim instead.
+-- vim.g.disable_copilot_lua = true
