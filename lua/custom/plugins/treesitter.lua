@@ -1,3 +1,22 @@
+local ensure_installed = {
+  'bash',
+  'diff',
+  'git_rebase',
+  'gitcommit',
+  'go',
+  'javascript',
+  'json',
+  'ledger',
+  'markdown',
+  'markdown_inline',
+  'python',
+  'sql',
+  'ssh_config',
+  'tsx',
+  'typescript',
+  'yaml',
+}
+
 return {
   {
     'nvim-treesitter/nvim-treesitter',
@@ -44,6 +63,9 @@ return {
           vim.bo[args.buf].indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
         end,
       })
+    end,
+    config = function()
+      require('nvim-treesitter').install(ensure_installed)
     end,
   },
 }
