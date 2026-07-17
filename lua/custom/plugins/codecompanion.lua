@@ -6,17 +6,6 @@ return {
       'ravitemer/mcphub.nvim', -- Add MCPHub as dependency
       'ravitemer/codecompanion-history.nvim',
     },
-    build = function()
-      local plugin_path = vim.fn.stdpath 'data' .. '/lazy/codecompanion.nvim'
-      local patch_file = vim.fn.stdpath 'config' .. '/patches/codecompanion/skip_oauth.patch'
-      vim.system({ 'patch', '-d', plugin_path, '-p1', '-i', patch_file }, { text = true }, function(obj)
-        vim.schedule(function()
-          if obj.code == 0 then
-            vim.notify('Patched codecompanion.nvim successfully', vim.log.levels.INFO)
-          end
-        end)
-      end)
-    end,
     config = function()
       local my_config = {
         adapters = {
@@ -25,8 +14,8 @@ return {
               return require('codecompanion.adapters').extend('copilot', {
                 schema = {
                   model = {
-                    -- default = 'claude-haiku-4.5',
-                    default = 'claude-sonnet-4.6',
+                    default = 'claude-haiku-4.5',
+                    -- default = 'claude-sonnet-4.6',
                     -- default = 'gpt-5.4',
                   },
                 },
@@ -50,7 +39,6 @@ return {
                 env = {
                   -- Explicitly ensures it pulls from your system environment variable
                   -- api_key = os.getenv 'ANTHROPIC_API_KEY',
-                  api_key = '***REMOVED***',
                 },
                 schema = {
                   model = {
@@ -61,15 +49,27 @@ return {
               })
             end,
           },
-          -- acp = {
-          --   claude_code = function()
-          --     return require('codecompanion.adapters').extend('claude_code', {
-          --       env = {
-          --         CLAUDE_CODE_OAUTH_TOKEN = '***REMOVED***',
-          --       },
-          --     })
-          --   end,
-          -- },
+          acp = {
+            claude_code = function()
+              return require('codecompanion.adapters').extend('claude_code', {
+                env = {
+                  CLAUDE_CODE_OAUTH_TOKEN = '***REMOVED***',
+                },
+                defaults = {
+                  -- 'default' IS Sonnet 4.6, covered by the subscription.
+                  -- Do NOT use 'sonnet[1m]' — that is the 1M-context variant, billed as extra
+                  -- usage ($3/$15 per Mtok), which rate-limits immediately without extra usage enabled.
+                  -- Options (also listed via `gA` in a chat):
+                  --   default            Sonnet 4.6 · everyday tasks
+                  --   sonnet[1m]         Sonnet 4.6, 1M context · extra usage billing
+                  --   opus / opus[1m]    Opus 4.6 (1m = extra usage billing)
+                  --   haiku              Haiku 4.5
+                  --   claude-fable-5[1m] Fable 5 · extra usage billing
+                  model = 'default',
+                },
+              })
+            end,
+          },
         },
         -- Your existing CodeCompanion configuration
         -- ACP adapters configuration for Gemini CLI
@@ -99,19 +99,10 @@ return {
         --   end,
         -- },
         interactions = {
+          -- NOTE: only `chat` (and `cli`) support ACP adapters like claude_code.
+          -- `inline`, `cmd` and `background` bail out on anything non-HTTP, so they stay on copilot.
           chat = {
-            adapter = {
-              name = 'copilot', -- or your preferred adapter
-              model = 'claude-haiku-4.5',
-            },
-            -- model = 'gpt-4.1',
-          },
-          -- inline = {
-          -- 	adapter = 'openai',
-          -- },
-        },
-        strategies = {
-          chat = {
+            adapter = 'claude_code',
             roles = {
               llm = function(adapter)
                 local model = adapter.model
@@ -142,7 +133,7 @@ return {
               system_prompt = function(ctx)
                 -- Get the default system prompt from the config
                 -- local default_config = require('codecompanion.config').default
-                -- local default_prompt = default_config.strategies.chat.opts.system_prompt(args)
+                -- local default_prompt = default_config.interactions.chat.opts.system_prompt(args)
 
                 -- Replace the line that disallows diff formatting with one that encourages it
                 local default_prompt = ctx.default_system_prompt:gsub(
@@ -153,15 +144,15 @@ return {
                 return default_prompt
               end,
             },
-          },
-          slash_commands = {
-            ['file'] = {
-              -- Location to the slash command in CodeCompanion
-              callback = 'strategies.chat.slash_commands.file',
-              description = 'Select a file using Telescope',
-              opts = {
-                provider = 'telescope', -- Other options include 'default', 'mini_pick', 'fzf_lua', snacks
-                contains_code = true,
+            slash_commands = {
+              ['file'] = {
+                -- Location to the slash command in CodeCompanion
+                path = 'interactions.shared.slash_commands.file',
+                description = 'Select a file using Telescope',
+                opts = {
+                  provider = 'telescope', -- Other options include 'default', 'mini_pick', 'fzf_lua', snacks
+                  contains_code = true,
+                },
               },
             },
           },
@@ -210,11 +201,8 @@ return {
               ---Automatically generate titles for new chats
               auto_generate_title = true,
               title_generation_opts = {
-                ---Adapter for generating titles (defaults to current chat adapter)
-                -- adapter = nil, -- "copilot"
+                ---Adapter for generating titles. Must be HTTP-based; ACP adapters are rejected.
                 adapter = 'copilot',
-                ---Model for generating titles (defaults to current chat model)
-                -- model = nil, -- "gpt-4o"
                 model = 'claude-haiku-4.5',
                 ---Number of user prompts after which to refresh the title (0 to disable)
                 refresh_every_n_prompts = 0, -- e.g., 3 to refresh after every 3rd user prompt
@@ -242,8 +230,7 @@ return {
                 -- Keymap to browse summaries (default: "gbs")
                 browse_summaries_keymap = 'gbs',
                 generation_opts = {
-                  -- adapter = nil, -- defaults to current chat adapter
-                  -- model = nil, -- defaults to current chat model
+                  -- Must be HTTP-based; ACP adapters are rejected for summary generation.
                   adapter = 'copilot',
                   model = 'claude-haiku-4.5',
                   context_size = 90000, -- max tokens that the model supports
@@ -271,7 +258,6 @@ return {
         },
       }
       require('codecompanion').setup(my_config)
-      require('codecompanion').config = my_config
     end,
   },
 }
