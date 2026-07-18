@@ -32,23 +32,23 @@ return {
       require('render-markdown').setup {
         anti_conceal = {
           enabled = true,
-          ignore = {
-            head_icon = { 'n' },
-            head_background = { 'n' },
-            head_border = { 'n' },
-            code_language = { 'n' },
-            code_background = { 'n' },
-            code_border = { 'n' },
-            dash = { 'n' },
-            bullet = { 'n' },
-            check_icon = { 'n' },
-            check_scope = { 'n' },
-            quote = { 'n' },
-            table_border = { 'n' },
-            callout = { 'n' },
-            link = { 'n' },
-            sign = { 'n' },
-          },
+          -- Disable the cursor-line "show raw" behavior in every rendered mode
+          -- except insert. Result: normal/command/terminal stay fully rendered
+          -- (easy to browse); in insert mode only the current line shows raw
+          -- markdown so you can edit it in place. This replaces the old
+          -- per-element `ignore = { ... = { 'n' } }` list, which missed inline
+          -- emphasis markers and so leaked raw markdown on the cursor line.
+          disabled_modes = { 'n', 'c', 't' },
+        },
+        -- Native-conceal elements (table pipes, inline-code backticks, `**`/`_`
+        -- markers, link URLs) are hidden via Neovim's own `conceal`, which is
+        -- governed by `concealcursor`, NOT by anti_conceal above. The plugin's
+        -- default reveals them on the cursor line in *all* modes (rendered = '').
+        -- Set 'nc' so they stay hidden (rendered) on the cursor line in normal
+        -- and command mode, and are only revealed (raw) while in insert mode —
+        -- completing the hybrid behavior for these elements.
+        win_options = {
+          concealcursor = { rendered = 'nc' },
         },
         html = { enabled = false },
         render_modes = { 'n', 'c', 't', 'i' },
