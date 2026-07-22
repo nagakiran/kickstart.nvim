@@ -171,7 +171,12 @@ return {
       -- an LSP, which fails ("--lsp" unsupported, exit code 2). Exclude it from automatic_enable.
       require('mason-lspconfig').setup {
         automatic_enable = {
-          exclude = { 'stylua' },
+          -- marksman auto-attaches to markdown (our ~/textfiles/*.txt help/notes files
+          -- are set to filetype=markdown), which sets tagfunc=vim.lsp.tagfunc and hijacks
+          -- :tj/:tag — exact tag jumps become fuzzy workspace/symbol queries. We navigate
+          -- via the ~/textfiles/tags file (and use Telescope for gd), so exclude it.
+          -- jsonls is unused here; excluded as cleanup.
+          exclude = { 'stylua', 'marksman', 'jsonls' },
         },
       }
     end,
