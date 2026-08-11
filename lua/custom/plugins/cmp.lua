@@ -59,12 +59,19 @@ return {
           { name = 'nvim_lsp' },
           { name = 'luasnip' },
           { name = 'path' },
-          -- To search across all buffers
-          { name = 'buffer', option = {
-            get_bufnrs = function()
-              return vim.api.nvim_list_bufs()
-            end,
-          } },
+          -- To search across all buffers, minus the oversized ones: cmp re-filters the whole
+          -- word index on every keystroke, and a single big notes file contributes ~20k words.
+          {
+            name = 'buffer',
+            option = {
+              get_bufnrs = function()
+                local bigbuf = require 'bigbuf'
+                return vim.tbl_filter(function(buf)
+                  return vim.api.nvim_buf_is_loaded(buf) and not bigbuf.is_heavy(buf)
+                end, vim.api.nvim_list_bufs())
+              end,
+            },
+          },
         },
       }
     end,

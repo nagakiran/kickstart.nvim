@@ -332,6 +332,9 @@ require('lazy').setup({
         topdelete = { text = '‾' },
         changedelete = { text = '~' },
       },
+      -- Default is 40000. The big ~/textfiles notes sit well under that, so gitsigns re-diffs
+      -- them on every change -- against a 1.1GB .git. Roughly matches bigbuf.threshold.
+      max_file_length = 4000,
     },
   },
 
@@ -709,6 +712,7 @@ vim.keymap.set('n', '<leader>ct', ':!source ~/.bash_aliases && juniper_token<CR>
 
 vim.api.nvim_set_hl(0, 'RenderMarkdownInlineHighlight', { fg = '#E39AA6', bg = '#1a190c', bold = true })
 vim.o.winbar = "%{expand('%:.')}" -- To show the file path just below tabbar
+vim.opt.tags = vim.fn.expand '~/textfiles/tags'
 
 -- Copy as rich text (<leader>cf / <leader>cx) lives in lua/custom/plugins/render_markdown.lua
 
@@ -724,3 +728,4 @@ vim.o.winbar = "%{expand('%:.')}" -- To show the file path just below tabbar
 --   --   end
 --   -- end,
 -- })
+vim.g.fugitive_summary_log_columns = { 'date', 'author', 'subject' }

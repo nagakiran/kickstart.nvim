@@ -31,6 +31,12 @@ return {
             return false
           end
 
+          -- Oversized notes files: auto_trigger would ship the whole document as context
+          -- every 75ms of idle typing.
+          if require('bigbuf').is_heavy(bufnr) then
+            return false
+          end
+
           return true
         end,
         suggestion = {
