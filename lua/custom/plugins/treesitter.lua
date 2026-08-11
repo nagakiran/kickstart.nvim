@@ -34,6 +34,11 @@ return {
           multiwindow = false,
           max_lines = 5,
           multiline_threshold = 20,
+          -- Skip oversized buffers: this updates on WinScrolled, which fires in insert mode
+          -- once typing pushes the view down, and each update forces a full re-parse.
+          on_attach = function(buf)
+            return not require('bigbuf').is_heavy(buf)
+          end,
         },
         config = function(_, opts)
           require('treesitter-context').setup(opts)
