@@ -613,8 +613,8 @@ require('lazy').setup({
 vim.cmd [[
   " syntax on
   autocmd BufRead,BufNewFile ~/textfiles/*.txt set filetype=markdown
-	" Need to add it explicitly as looks based markdown syntax file is not loaded automatically and treesitter/render-markdown syntax is getting loaded
-	autocmd FileType markdown source ~/.config/nvim/after/syntax/markdown.vim
+	" after/syntax/markdown.vim is sourced from lua/autocommands.lua -- it has to be re-applied
+	" whenever tree-sitter highlighting is stopped/started, so it lives next to that logic
   " autocmd BufRead,BufNewFile ~/textfiles/journals/*.txt set filetype=markdown.jrnl.txtfmt
   au BufNewFile,BufRead *.tjp,*.tji               setf tjp
   ]]
