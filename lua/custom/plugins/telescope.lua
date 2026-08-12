@@ -29,6 +29,18 @@ return {
       local action_state = require 'telescope.actions.state'
       local previewers = require 'telescope.previewers'
       local putils = require 'telescope.previewers.utils'
+      local gitctx = require 'gitctx' -- repo/path/revision of the current buffer (handles fugitive blobs)
+
+      -- `git log` argv shared by every commit picker below, so the commit line always reads
+      -- '<sha> <date> <author> <subject>' (telescope's entry maker splits off the sha and
+      -- shows the rest as the message). Returns a fresh table each call.
+      --   root   run git there via -C (nil = let telescope run it in opts.cwd)
+      --   extra  flags appended after the format, e.g. { '--no-patch', '-L' }
+      local function git_log_cmd(root, extra)
+        local cmd = root and { 'git', '-C', root } or { 'git' }
+        vim.list_extend(cmd, { 'log', '--pretty=%h %ad %an %s', '--abbrev-commit', '--date=short' })
+        return vim.list_extend(cmd, extra or {})
+      end
 
       -- [[ Configure Telescope ]]
       -- See `:help telescope` and `:help telescope.setup()`
@@ -66,17 +78,19 @@ return {
             path_display = { 'truncate' },
           },
           git_bcommits = {
-            -- To show date also in bcommits
-            git_command = { 'git', 'log', '--pretty=%h %ad %an %s', '--abbrev-commit', '--date=short' },
+            -- To show date also in bcommits. NOTE: <leader>sb passes its own git_command
+            -- (built by the same git_log_cmd) to scope the log to the buffer's revision, so
+            -- this default only applies to git_bcommits invoked from elsewhere.
+            git_command = git_log_cmd(),
           },
           git_bcommits_range = {
             -- Same date/author format as git_bcommits. Must include --no-patch and END with
             -- `-L` so Telescope can append the `<from>,<to>:<file>` line-range argument.
-            git_command = { 'git', 'log', '--pretty=%h %ad %an %s', '--abbrev-commit', '--date=short', '--no-patch', '-L' },
+            git_command = git_log_cmd(nil, { '--no-patch', '-L' }),
           },
           git_commits = {
             -- To show date/author name also in bcommits
-            git_command = { 'git', 'log', '--pretty=%h %ad %an %s', '--abbrev-commit', '--date=short' },
+            git_command = git_log_cmd(),
           },
         },
         extensions = {
@@ -122,27 +136,26 @@ return {
       if builtin.changelist then
         vim.keymap.set('n', '<leader>si', builtin.changelist, { desc = 'Change List entries [I]nsert mode' })
       end
-      -- Build a `git show`-style buffer previewer for the bcommits pickers. Runs git inside
-      -- the file's own directory (-C <dir>) so it is robust to cwd/repo-root mismatch
-      -- (vim-rooter, multiple buffers, etc.).
+      -- Build a `git show`-style buffer previewer for the bcommits pickers. Runs git at the
+      -- repo root resolved by gitctx (-C <root>) with a repo-relative pathspec, so it is
+      -- robust to cwd/repo-root mismatch (vim-rooter, worktrees, multiple buffers) and to
+      -- files whose directory doesn't exist in the current checkout.
+      --   ctx    gitctx context of the buffer the picker was opened from
       --   title  preview window title
-      --   args   function(rev, base) -> git args appended after `git -C <dir> --no-pager`
+      --   args   function(rev, relpath) -> git args appended after `git -C <root> --no-pager`
       --   ft     filetype used for syntax highlighting
-      local function commit_previewer(title, args, ft)
+      local function commit_previewer(ctx, title, args, ft)
         return previewers.new_buffer_previewer {
           title = title,
           get_buffer_by_name = function(_, entry)
             return entry.value
           end,
           define_preview = function(self, entry)
-            local file = entry.current_file
-            local dir = vim.fn.fnamemodify(file, ':p:h')
-            local base = vim.fn.fnamemodify(file, ':t')
-            local cmd = vim.list_extend({ 'git', '-C', dir, '--no-pager' }, args(entry.value, base))
+            local cmd = vim.list_extend({ 'git', '-C', ctx.root, '--no-pager' }, args(entry.value, ctx.relpath))
             putils.job_maker(cmd, self.state.bufnr, {
               value = entry.value,
               bufname = self.state.bufname,
-              cwd = dir,
+              cwd = ctx.root,
               callback = function(bufnr)
                 if vim.api.nvim_buf_is_valid(bufnr) then
                   putils.highlighter(bufnr, ft)
@@ -154,24 +167,21 @@ return {
       end
 
       -- Default bcommits preview: commit message + `--stat` file list (all files in the
-      -- commit) + this file's diff. Runs git in the file's own dir for cwd-robustness.
-      -- A single `git` invocation can't produce both the all-file stat and the focused
-      -- diff, so this runs two commands and concatenates them (unlike commit_previewer).
-      local function commit_stat_diff_previewer()
+      -- commit) + this file's diff. A single `git` invocation can't produce both the
+      -- all-file stat and the focused diff, so this runs two commands and concatenates
+      -- them (unlike commit_previewer).
+      local function commit_stat_diff_previewer(ctx)
         return previewers.new_buffer_previewer {
           title = 'Stat + File Diff',
           get_buffer_by_name = function(_, entry)
             return entry.value
           end,
           define_preview = function(self, entry)
-            local file = entry.current_file
-            local dir = vim.fn.fnamemodify(file, ':p:h')
-            local base = vim.fn.fnamemodify(file, ':t')
             local rev = entry.value
             -- `git show --stat` => message header + changed-files summary (all files)
-            local stat = vim.fn.systemlist { 'git', '-C', dir, '--no-pager', 'show', '--stat', rev }
+            local stat = vim.fn.systemlist { 'git', '-C', ctx.root, '--no-pager', 'show', '--stat', rev }
             -- `--format=` suppresses the message so we don't repeat the header
-            local diff = vim.fn.systemlist { 'git', '-C', dir, '--no-pager', 'show', '--format=', rev, '--', base }
+            local diff = vim.fn.systemlist { 'git', '-C', ctx.root, '--no-pager', 'show', '--format=', rev, '--', ctx.relpath }
             local lines = vim.list_extend(stat, { '' })
             vim.list_extend(lines, diff)
             vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
@@ -183,23 +193,26 @@ return {
       -- Previewer list for the bcommits pickers. Cycle with <C-Space>/<M-Space>.
       -- Default = commit message + all-file stat + this file's diff; then message-only,
       -- then diff-only.
-      local function bcommits_previewers()
+      local function bcommits_previewers(ctx)
         return {
-          commit_stat_diff_previewer(),
-          commit_previewer('Commit Message', function(rev)
+          commit_stat_diff_previewer(ctx),
+          commit_previewer(ctx, 'Commit Message', function(rev)
             return { 'log', '-n', '1', rev }
           end, 'git'),
-          commit_previewer('File Diff to Parent', function(rev, base)
-            return { 'show', '--format=', rev, '--', base } -- --format= suppresses the message header
+          commit_previewer(ctx, 'File Diff to Parent', function(rev, relpath)
+            return { 'show', '--format=', rev, '--', relpath } -- --format= suppresses the message header
           end, 'diff'),
         }
       end
 
       -- Shared picker mappings for the buffer-commit pickers (git_bcommits and
-      -- git_bcommits_range). Both use the same entry maker, so `selection.value` (sha)
-      -- and `selection.current_file` are available in either picker.
+      -- git_bcommits_range). Both use the same entry maker, so `selection.value` (the sha)
+      -- is available in either picker; the file itself comes from `ctx` (gitctx).
       -- The preview shows the full commit message (author/date/subject/body) followed by
       -- this file's diff; cycle the preview with <C-Space>/<M-Space>.
+      -- Every commit is opened as a fugitive blob (fugitive://<gitdir>//<sha>/<path>), so
+      -- <leader>sb, :Git blame and :0Gclog all work again from the result — the history
+      -- walk chains instead of dead-ending in a scratch buffer.
       -- Keybindings inside the picker:
       --   <CR>           → send all listed commits to the quickfix list
       --   <C-t>          → open the file snapshot at the selected commit in a new tab
@@ -208,162 +221,144 @@ return {
       --   <C-x>          → stacked (horizontal) diff of the commit vs its parent
       --   <C-Space>      → cycle preview: stat+diff → message → diff (→ back)
       --   <M-Space>      → cycle preview the other way
-      local function bcommits_attach_mappings(prompt_bufnr, map)
-        -- Cycle between the combined / message-only / diff-only previewers.
-        map({ 'i', 'n' }, '<C-Space>', actions.cycle_previewers_next)
-        map({ 'i', 'n' }, '<M-Space>', actions.cycle_previewers_prev)
+      local function bcommits_attach_mappings(ctx)
+        return function(prompt_bufnr, map)
+          -- Cycle between the combined / message-only / diff-only previewers.
+          map({ 'i', 'n' }, '<C-Space>', actions.cycle_previewers_next)
+          map({ 'i', 'n' }, '<M-Space>', actions.cycle_previewers_prev)
 
-        -- <C-d>: open the WHOLE commit's diff (all files) in a scratch buffer in a new tab.
-        -- NOTE: this overrides telescope's default <C-d> (preview_scrolling_down) for these
-        -- pickers; <C-u> (scroll up) and the other defaults remain.
-        map({ 'i', 'n' }, '<C-d>', function()
-          local selection = action_state.get_selected_entry()
-          actions.close(prompt_bufnr)
-          local dir = vim.fn.fnamemodify(selection.current_file, ':p:h')
-          local rev = selection.value
-          local content = vim.fn.systemlist { 'git', '-C', dir, '--no-pager', 'show', rev }
-          if vim.v.shell_error ~= 0 then
-            vim.notify('Failed to fetch commit diff', vim.log.levels.ERROR)
-            return
-          end
-          vim.cmd 'tabnew'
-          local buf = vim.api.nvim_get_current_buf()
-          vim.api.nvim_buf_set_lines(buf, 0, -1, false, content)
-          vim.bo[buf].buftype = 'nofile' -- not backed by a real file
-          vim.bo[buf].bufhidden = 'wipe' -- clean up when the tab is closed
-          vim.bo[buf].filetype = 'git' -- highlights message + multi-file diff
-          vim.api.nvim_buf_set_name(buf, 'COMMIT:' .. rev:sub(1, 7))
-        end)
-
-        -- Return the lines of `file` at git revision `rev`, or nil on failure.
-        -- `git show <rev>:<path>` resolves <path> relative to the REPO ROOT, so run git
-        -- inside the file's own directory and use a './'-prefixed pathspec. This is robust
-        -- to Neovim's cwd not matching the repo root (vim-rooter, multiple buffers, etc.).
-        local function git_file_lines(rev, file)
-          local dir = vim.fn.fnamemodify(file, ':p:h')
-          local base = vim.fn.fnamemodify(file, ':t')
-          local content = vim.fn.systemlist { 'git', '-C', dir, 'show', rev .. ':./' .. base }
-          if vim.v.shell_error ~= 0 then
-            return nil
-          end
-          return content
-        end
-
-        -- Helper: open a diff view between the selected commit and its parent.
-        -- `split_cmd` controls how the OLD buffer is placed (vertical / horizontal).
-        local function diff_commit(split_cmd)
-          local selection = action_state.get_selected_entry()
-          actions.close(prompt_bufnr) -- close telescope before opening new windows
-
-          -- Create a scratch buffer populated with `git show <rev>:<file>` output.
-          -- `prefix` is used in the buffer name to label it NEW or OLD.
-          local function create_git_buf(rev, prefix)
-            local content = git_file_lines(rev, selection.current_file) -- file contents at `rev`
-            if not content then
-              return nil -- git command failed (e.g. file didn't exist at that rev)
+          -- <C-d>: open the WHOLE commit's diff (all files) in a scratch buffer in a new tab.
+          -- NOTE: this overrides telescope's default <C-d> (preview_scrolling_down) for these
+          -- pickers; <C-u> (scroll up) and the other defaults remain.
+          map({ 'i', 'n' }, '<C-d>', function()
+            local selection = action_state.get_selected_entry()
+            actions.close(prompt_bufnr)
+            local rev = selection.value
+            local content = vim.fn.systemlist { 'git', '-C', ctx.root, '--no-pager', 'show', rev }
+            if vim.v.shell_error ~= 0 then
+              vim.notify('Failed to fetch commit diff', vim.log.levels.ERROR)
+              return
             end
-            local bufnr = vim.api.nvim_create_buf(false, true) -- unlisted, scratch buffer
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, content)
-            vim.bo[bufnr].filetype = vim.filetype.match { filename = selection.current_file } or '' -- preserve syntax highlighting
-            vim.bo[bufnr].buftype = 'nofile' -- not backed by a real file
-            vim.bo[bufnr].bufhidden = 'wipe' -- auto-delete when hidden
-            -- Name format: NEW:<sha7>:<filename>  or  OLD:<sha7>:<filename>
-            vim.api.nvim_buf_set_name(bufnr, prefix .. ':' .. selection.value:sub(1, 7) .. ':' .. vim.fn.fnamemodify(selection.current_file, ':t'))
-            return bufnr
+            vim.cmd 'tabnew'
+            local buf = vim.api.nvim_get_current_buf()
+            vim.api.nvim_buf_set_lines(buf, 0, -1, false, content)
+            vim.bo[buf].buftype = 'nofile' -- not backed by a real file
+            vim.bo[buf].bufhidden = 'wipe' -- clean up when the tab is closed
+            vim.bo[buf].filetype = 'git' -- highlights message + multi-file diff
+            vim.api.nvim_buf_set_name(buf, 'COMMIT:' .. rev:sub(1, 7))
+          end)
+
+          -- Open this file at the selected commit in a new tab. Returns the sha, or nil if
+          -- the blob doesn't exist there (commits before a rename that --follow walked past).
+          local function open_commit_blob()
+            local selection = action_state.get_selected_entry()
+            actions.close(prompt_bufnr) -- close telescope before opening new windows
+            local rev = selection.value
+            if not gitctx.object_exists(ctx.root, rev, ctx.relpath) then
+              vim.notify(ctx.relpath .. ' does not exist at ' .. rev:sub(1, 7) .. ' (renamed?)', vim.log.levels.WARN)
+              return nil
+            end
+            return gitctx.open_blob(ctx.gitdir, rev, ctx.relpath, 'tabedit') and rev or nil
           end
 
-          local buf_new = create_git_buf(selection.value, 'NEW') -- the selected commit
-          local buf_old = create_git_buf(selection.value .. '^', 'OLD') -- its parent commit (^ suffix)
-
-          if not buf_new then
-            vim.api.nvim_err_writeln 'Failed to fetch commit content'
-            return
+          -- Diff the selected commit against its parent. `split_cmd` is fugitive's
+          -- vertical/horizontal diff command; the parent lands in the new (left/top) window.
+          local function diff_commit(split_cmd)
+            local rev = open_commit_blob()
+            if not rev then
+              return
+            end
+            local parent = rev .. '^'
+            if not gitctx.object_exists(ctx.root, parent, ctx.relpath) then
+              vim.notify('No parent revision of ' .. ctx.relpath .. ' at ' .. rev:sub(1, 7) .. ' (added here?)', vim.log.levels.INFO)
+              return
+            end
+            local ok, err = pcall(vim.cmd, split_cmd .. ' ' .. vim.fn.fnameescape(parent .. ':' .. ctx.relpath))
+            if not ok then
+              vim.notify(split_cmd .. ' failed — ' .. tostring(err), vim.log.levels.WARN)
+            end
           end
 
-          vim.cmd 'tabnew' -- open a fresh tab for the diff
-          vim.api.nvim_set_current_buf(buf_new) -- load NEW side into the tab
-          vim.cmd 'diffthis' -- mark NEW as a diff window
-          if buf_old then
-            vim.cmd(split_cmd .. ' ' .. buf_old) -- open OLD in a split next to NEW
-            vim.cmd 'diffthis' -- mark OLD as a diff window
-          end
+          -- 1. <C-t>: Open the file snapshot at the selected commit in a new tab (no diff)
+          actions.select_tab:replace(open_commit_blob)
+
+          -- 2. <C-v>: Diff the selected commit against its parent in a vertical split
+          actions.select_vertical:replace(function()
+            diff_commit 'Gvdiffsplit'
+          end)
+
+          -- 3. <C-x>: Diff the selected commit against its parent in a horizontal split
+          actions.select_horizontal:replace(function()
+            diff_commit 'Gdiffsplit'
+          end)
+
+          -- 4. <CR>: Send all commits shown in the picker to the quickfix list
+          actions.select_default:replace(function()
+            actions.send_to_qflist(prompt_bufnr) -- populate quickfix
+            actions.open_qflist(prompt_bufnr) -- and jump to it
+          end)
+
+          return true -- signal that mappings were successfully attached
         end
+      end
 
-        -- 1. <C-t>: Open the file snapshot at the selected commit in a new tab (no diff)
-        actions.select_tab:replace(function()
-          local selection = action_state.get_selected_entry()
-          actions.close(prompt_bufnr)
+      -- Shared opts for both bcommits pickers. Everything is pinned to the gitctx context so
+      -- the picker follows the buffer's *revision*, not the checked-out HEAD: on a fugitive
+      -- blob (a branch file opened by <leader>dF/<leader>dL without checking the branch out)
+      -- `ctx.rev` is that branch's commit, so the log — and the -L line range, which is
+      -- numbered against the blob in front of you — is scoped to that branch.
+      --   `base_cmd` is completed by telescope, which appends opts.current_file (normal mode,
+      --   hence the trailing '--' to keep git from reading the path as a revision) or the
+      --   '<first>,<last>:<relpath>' spec (visual mode, after -L).
+      local function bcommits_opts(ctx, base_cmd)
+        return {
+          cwd = ctx.root,
+          current_file = ctx.abspath,
+          git_command = base_cmd,
+          attach_mappings = bcommits_attach_mappings(ctx),
+          previewer = bcommits_previewers(ctx),
+        }
+      end
 
-          vim.cmd 'tabnew'
-          local new_buf = vim.api.nvim_get_current_buf()
-
-          -- Retrieve the file contents at the exact commit SHA
-          local content = git_file_lines(selection.value, selection.current_file)
-
-          if not content then
-            vim.notify('Failed to fetch git content', vim.log.levels.ERROR)
-            return
-          end
-
-          vim.api.nvim_buf_set_lines(new_buf, 0, -1, false, content)
-
-          vim.bo[new_buf].buftype = 'nofile' -- read-only scratch buffer
-          vim.bo[new_buf].bufhidden = 'wipe' -- clean up when the tab is closed
-          vim.bo[new_buf].filetype = vim.filetype.match { filename = selection.current_file } or ''
-
-          -- Name the buffer <sha7>:<filename> for easy identification in the tabline
-          local short_sha = selection.value:sub(1, 7)
-          local filename = vim.fn.fnamemodify(selection.current_file, ':t')
-          vim.api.nvim_buf_set_name(new_buf, short_sha .. ':' .. filename)
-        end)
-
-        -- 2. <C-v>: Diff the selected commit against its parent in a vertical split
-        actions.select_vertical:replace(function()
-          diff_commit 'leftabove vert sbuffer'
-        end)
-
-        -- 3. <C-x>: Diff the selected commit against its parent in a horizontal split
-        actions.select_horizontal:replace(function()
-          diff_commit 'belowright sbuffer'
-        end)
-
-        -- 4. <CR>: Send all commits shown in the picker to the quickfix list
-        actions.select_default:replace(function()
-          actions.send_to_qflist(prompt_bufnr) -- populate quickfix
-          actions.open_qflist(prompt_bufnr) -- and jump to it
-        end)
-
-        return true -- signal that mappings were successfully attached
+      -- Resolve the current buffer's repo/path/revision, or notify and return nil.
+      local function bcommits_ctx()
+        local ctx = gitctx.for_buf(0)
+        if not ctx then
+          vim.notify('Current buffer is not a file inside a git repository', vim.log.levels.WARN)
+          return nil
+        end
+        return ctx
       end
 
       -- Normal mode: all commits that touched the current buffer.
       vim.keymap.set('n', '<leader>sb', function()
-        builtin.git_bcommits { attach_mappings = bcommits_attach_mappings, previewer = bcommits_previewers() }
+        local ctx = bcommits_ctx()
+        if ctx then
+          builtin.git_bcommits(bcommits_opts(ctx, git_log_cmd(ctx.root, { ctx.rev or 'HEAD', '--' })))
+        end
       end, { desc = '[S]earch [B]uffer Git Commits' })
 
       -- Visual mode: only commits that touched the SELECTED line range (git log -L).
       -- A plain Lua callback keeps visual mode active during execution, so
       -- git_bcommits_range picks up the selection via mode()/line "v".
       vim.keymap.set('x', '<leader>sb', function()
-        builtin.git_bcommits_range { attach_mappings = bcommits_attach_mappings, previewer = bcommits_previewers() }
+        local ctx = bcommits_ctx()
+        if ctx then
+          builtin.git_bcommits_range(bcommits_opts(ctx, git_log_cmd(ctx.root, { '--no-patch', ctx.rev or 'HEAD', '-L' })))
+        end
       end, { desc = '[S]earch [B]uffer Git Commits (selected range)' })
 
       -- Resolve the git root for the current buffer, falling back to cwd if the buffer
       -- isn't inside a repo (e.g. an empty/scratch buffer). Shared by the git_commits
       -- filters below and mirrors the resolution already used by <leader>sD/<leader>sG.
       local function git_root_for_current_buffer()
-        local out = vim.fn.systemlist { 'git', '-C', vim.fn.expand '%:p:h', 'rev-parse', '--show-toplevel' }
-        local root = out[1]
-        if vim.v.shell_error ~= 0 or not root or root == '' then
-          root = vim.fn.getcwd()
-        end
-        return root
+        return gitctx.root_for_buf(0)
       end
 
-      -- Build the git_commits `git_command` for the given filters. Base format matches the
-      -- setup()-level default (pickers.git_commits.git_command); flags are appended only when set.
+      -- Build the git_commits `git_command` for the given filters. Base format is the shared
+      -- git_log_cmd used by every commit picker; flags are appended only when set.
       local function build_git_commits_command(filters)
-        local cmd = { 'git', 'log', '--pretty=%h %ad %an %s', '--abbrev-commit', '--date=short' }
+        local cmd = git_log_cmd()
         if filters.author then
           table.insert(cmd, '--author=' .. filters.author)
         end

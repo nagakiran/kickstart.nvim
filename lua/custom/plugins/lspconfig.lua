@@ -24,6 +24,16 @@ return {
       vim.api.nvim_create_autocmd('LspAttach', {
         group = vim.api.nvim_create_augroup('kickstart-lsp-attach', { clear = true }),
         callback = function(event)
+          -- Fugitive blob buffers (fugitive://<gitdir>//<sha>/<path> — a file at a revision,
+          -- see lua/gitctx.lua) have buftype='' and a real filetype, so vim.lsp.enable()
+          -- attaches servers to them. Servers can't resolve a fugitive:// URI, and
+          -- diagnostics against historic contents are noise, so back out here.
+          if vim.api.nvim_buf_get_name(event.buf):match '^fugitive://' then
+            vim.lsp.buf_detach_client(event.buf, event.data.client_id)
+            vim.diagnostic.enable(false, { bufnr = event.buf })
+            return
+          end
+
           local map = function(keys, func, desc, mode)
             mode = mode or 'n'
             vim.keymap.set(mode, keys, func, { buffer = event.buf, desc = 'LSP: ' .. desc })
