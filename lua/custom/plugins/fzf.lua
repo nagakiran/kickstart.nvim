@@ -3,6 +3,51 @@ return {
   -- optional for icon support
   dependencies = { 'nvim-tree/nvim-web-devicons' },
   config = function()
+    local fzf_actions = require 'fzf-lua.actions'
+    local fzf_path = require 'fzf-lua.path'
+    local fzf_utils = require 'fzf-lua.utils'
+
+    -- fzf-lua ships `actions.file_switch`, but it only ever looks at the current
+    -- tabpage (`winid_from_tabh(0, ...)`), so a buffer already open in another tab
+    -- gets duplicated into the current window. Search the current tabpage first --
+    -- an entry visible right here should never teleport you elsewhere -- then the rest.
+    local function winid_showing(bufnr)
+      local cur = vim.api.nvim_get_current_tabpage()
+      local win = fzf_utils.winid_from_tabh(cur, bufnr)
+      if win then
+        return win
+      end
+      for _, tabh in ipairs(vim.api.nvim_list_tabpages()) do
+        if tabh ~= cur then
+          win = fzf_utils.winid_from_tabh(tabh, bufnr)
+          if win then
+            return win
+          end
+        end
+      end
+    end
+
+    local function switch_or_edit(selected, opts)
+      -- Multi-select keeps fzf-lua's default behaviour (send to quickfix).
+      if #selected == 1 then
+        -- entry_to_file resolves `bufnr` from a plain path too, so this works for
+        -- the files/git_files pickers and not just `buffers`.
+        local entry = fzf_path.entry_to_file(selected[1], opts)
+        -- URI/terminal entries have their own handling in fzf-lua; don't intercept.
+        if entry.bufnr and not entry.uri and not entry.terminal then
+          local win = winid_showing(entry.bufnr)
+          if win then
+            vim.api.nvim_set_current_win(win) -- switches tabpage implicitly
+            if entry.line and entry.line > 0 then
+              pcall(vim.api.nvim_win_set_cursor, win, { entry.line, math.max((entry.col or 1) - 1, 0) })
+            end
+            return
+          end
+        end
+      end
+      fzf_actions.file_edit_or_qf(selected, opts)
+    end
+
     -- calling `setup` is optional for customization
     -- https://github.com/ibhagwan/fzf-lua/blob/main/OPTIONS.md
     require('fzf-lua').setup {
@@ -14,6 +59,17 @@ return {
         },
         status = {
           silent = true, -- Suppress the message
+        },
+      },
+      actions = {
+        -- Inherited by files, git_files, git_status, grep, lsp, oldfiles, quickfix,
+        -- loclist, tags, btags, args, buffers, tabs, lines, blines.
+        files = {
+          true, -- fzf-lua's inheritance marker: keep the default binds (ctrl-s/v/t, alt-q, ...)
+          ['enter'] = switch_or_edit,
+          -- Escape hatch: open in the current window even if it's visible elsewhere.
+          -- (ctrl-e is unusable here, fzf binds it to `end-of-line` in the query prompt.)
+          ['ctrl-o'] = fzf_actions.file_edit,
         },
       },
     }
