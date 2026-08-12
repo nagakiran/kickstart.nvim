@@ -165,6 +165,10 @@ vim.opt.timeoutlen = 300
 -- vim.opt.splitright = true
 -- vim.opt.splitbelow = true
 
+-- Reuse a window already showing the buffer, including one on another tabpage,
+-- for :sbuffer / :drop / quickfix & LSP list jumps.
+vim.opt.switchbuf = 'useopen,usetab'
+
 -- Sets how neovim will display certain whitespace characters in the editor.
 --  See `:help 'list'`
 --  and `:help 'listchars'`
