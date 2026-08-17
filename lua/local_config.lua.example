@@ -2,3 +2,20 @@
 
 -- Set true to disable zbirenbaum/copilot.lua + copilot-cmp and use supermaven-nvim instead.
 -- vim.g.disable_copilot_lua = true
+
+-- Secrets belong here, never in tracked files. Used by the codecompanion `claude_code`
+-- adapter; generate one at https://platform.claude.com/settings/keys
+-- vim.env.CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat01-...'
+
+-- CodeCompanion's copilot adapter (inline edits, :CodeCompanionCmd, background). Defaults to
+-- 'gpt-4.1' in lua/globals.lua, which is all a free Copilot account can serve. On a machine with
+-- a paid subscription, raise it:
+-- vim.g.cc_copilot_model = 'claude-sonnet-4.6'
+--
+-- Model for chat titles and summaries. Leave on a base model even with a paid subscription:
+-- gpt-4.1/gpt-4o cost 0 premium requests, Claude models bill 1x per call, and a five-word chat
+-- title is not worth the quota. Must be an HTTP adapter model — ACP (claude_code) is rejected.
+-- vim.g.cc_copilot_utility_model = 'gpt-4.1'
+--
+-- Check what your account can actually serve with `gA` in a chat buffer, or:
+--   curl -s -H "Authorization: Bearer $COPILOT_TOKEN" https://api.githubcopilot.com/models

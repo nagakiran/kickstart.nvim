@@ -14,9 +14,12 @@ return {
               return require('codecompanion.adapters').extend('copilot', {
                 schema = {
                   model = {
-                    default = 'claude-haiku-4.5',
-                    -- default = 'claude-sonnet-4.6',
-                    -- default = 'gpt-5.4',
+                    -- Set per machine via vim.g.cc_copilot_model (lua/globals.lua defines the
+                    -- default, lua/local_config.lua overrides it). Defaults to a base model
+                    -- because a `free_limited_copilot` account serves *only* base models:
+                    -- every Claude model and the whole GPT-5 family return `model_not_supported`
+                    -- at request time there, even though /models lists them as policy-enabled.
+                    default = vim.g.cc_copilot_model or 'gpt-4.1',
                   },
                 },
                 handlers = {
@@ -52,9 +55,11 @@ return {
           acp = {
             claude_code = function()
               return require('codecompanion.adapters').extend('claude_code', {
-                env = {
-                  CLAUDE_CODE_OAUTH_TOKEN = '***REMOVED***',
-                },
+                -- No `env` override on purpose: the upstream adapter already maps
+                -- CLAUDE_CODE_OAUTH_TOKEN to the environment variable of the same name.
+                -- Set it in the gitignored lua/local_config.lua (this repo is public), or export
+                -- it from your shell. If it is unset, the adapter falls back to the `claude`
+                -- CLI's own login. New tokens: https://platform.claude.com/settings/keys
                 defaults = {
                   -- 'default' IS Sonnet 4.6, covered by the subscription.
                   -- Do NOT use 'sonnet[1m]' — that is the 1M-context variant, billed as extra
@@ -203,7 +208,7 @@ return {
               title_generation_opts = {
                 ---Adapter for generating titles. Must be HTTP-based; ACP adapters are rejected.
                 adapter = 'copilot',
-                model = 'claude-haiku-4.5',
+                model = vim.g.cc_copilot_utility_model or 'gpt-4.1',
                 ---Number of user prompts after which to refresh the title (0 to disable)
                 refresh_every_n_prompts = 0, -- e.g., 3 to refresh after every 3rd user prompt
                 ---Maximum number of times to refresh the title (default: 3)
@@ -232,8 +237,8 @@ return {
                 generation_opts = {
                   -- Must be HTTP-based; ACP adapters are rejected for summary generation.
                   adapter = 'copilot',
-                  model = 'claude-haiku-4.5',
-                  context_size = 90000, -- max tokens that the model supports
+                  model = vim.g.cc_copilot_utility_model or 'gpt-4.1',
+                  context_size = 90000, -- fits the 128k max_prompt_tokens of gpt-4.1 and Sonnet
                   include_references = true, -- include slash command content
                   include_tool_outputs = true, -- include tool execution results
                   system_prompt = nil, -- custom system prompt (string or function)
