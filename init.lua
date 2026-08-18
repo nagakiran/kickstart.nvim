@@ -664,17 +664,27 @@ vim.filetype.get_option = function(filetype, option)
   return option == 'commentstring' and require('ts_context_commentstring.internal').calculate_commentstring() or get_option(filetype, option)
 end
 
+-- Put `text` on the + register and mirror it to the outer terminal's clipboard over OSC 52.
+-- vim.fn.setreg does not fire TextYankPost, so programmatic copies would otherwise never reach the
+-- Mac when nvim runs over ssh -- see the OSC 52 yank mirror at the bottom of this file.
+local function copy_to_clipboard(text)
+  local lines = type(text) == 'table' and text or vim.split(text, '\n')
+  vim.fn.setreg('+', text)
+  local osc52_copy = require('vim.ui.clipboard.osc52').copy '+'
+  osc52_copy(lines)
+end
+
 -- Mapping to copy all messages to clipboard
 vim.keymap.set('n', '<leader>mc', function()
   local messages = vim.api.nvim_exec2('messages', { output = true }).output
-  vim.fn.setreg('+', messages)
+  copy_to_clipboard(messages)
   vim.notify('Messages copied to clipboard!', vim.log.levels.INFO)
 end, { desc = 'Copy :messages to clipboard' })
 
 -- Shortcut to copy the current file absolute path name to clipboard
 vim.keymap.set('n', '<leader>cp', function()
   local path = vim.fn.expand '%:p'
-  vim.fn.setreg('+', path)
+  copy_to_clipboard(path)
   vim.notify('Copied absolute path to clipboard: ' .. path, vim.log.levels.INFO)
 end, { desc = 'Copy current file absolute [P]ath' })
 
