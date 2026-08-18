@@ -21,6 +21,27 @@ return {
       'hrsh7th/cmp-nvim-lsp',
     },
     config = function()
+      -- The default WARN level lets a misbehaving server write unboundedly: copilot's
+      -- OrgCustomAgentClient 404s every 5 minutes and checkStatus returns HTTP 502 in a loop,
+      -- which had grown lsp.log to 81MB. ERROR keeps genuine failures without the heartbeat spam.
+      vim.lsp.log.set_level(vim.log.levels.ERROR)
+
+      -- Servers outlive the buffers that started them: a tsserver was still resident 6 days after
+      -- its last TypeScript buffer closed, holding 3.5GB. Stop any client left with no attachments.
+      vim.api.nvim_create_autocmd({ 'BufDelete', 'BufUnload' }, {
+        group = vim.api.nvim_create_augroup('lsp-idle-shutdown', { clear = true }),
+        desc = 'Stop LSP clients once nothing is attached to them',
+        callback = function()
+          vim.defer_fn(function()
+            for _, client in ipairs(vim.lsp.get_clients()) do
+              if next(client.attached_buffers or {}) == nil then
+                client:stop()
+              end
+            end
+          end, 5000)
+        end,
+      })
+
       vim.api.nvim_create_autocmd('LspAttach', {
         group = vim.api.nvim_create_augroup('kickstart-lsp-attach', { clear = true }),
         callback = function(event)
@@ -104,6 +125,43 @@ return {
       })
       vim.lsp.enable 'gopls'
 
+      -- Trial: TypeScript 7 native preview (`tsgo`, a Go binary) in place of node's tsserver, for
+      -- stockscreener only. Measured on packages/frontend, full --noEmit typecheck:
+      --   tsgo  0.40s, 517MB peak RSS
+      --   tsc 5.9.3  2.14s, 732MB peak RSS
+      -- i.e. ~5x faster and ~29% less memory on the same object graph. Scoped to one tree so the
+      -- rest of the setup keeps the known-good ts_ls; widen TSGO_ROOTS once it has proven itself.
+      -- Configured outside `servers` (like gopls) because mason has no package for it and
+      -- mason-tool-installer installs every key of that table.
+      local TSGO_ROOTS = { '/opt/nagki/myprojs/stockscreener' }
+
+      local function tsgo_root_for(bufnr)
+        local fname = vim.api.nvim_buf_get_name(bufnr)
+        if fname == '' then
+          return nil
+        end
+        local norm = vim.fs.normalize(fname)
+        for _, root in ipairs(TSGO_ROOTS) do
+          if norm == root or norm:sub(1, #root + 1) == root .. '/' then
+            return root
+          end
+        end
+        return nil
+      end
+
+      vim.lsp.config('tsgo', {
+        cmd = { 'tsgo', '--lsp', '--stdio' },
+        filetypes = { 'javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'typescript.tsx' },
+        -- Not calling on_dir() declines the buffer, which is how tsgo stays confined to TSGO_ROOTS.
+        root_dir = function(bufnr, on_dir)
+          local root = tsgo_root_for(bufnr)
+          if root then
+            on_dir(root)
+          end
+        end,
+      })
+      vim.lsp.enable 'tsgo'
+
       local servers = {
         pyright = {
           settings = {
@@ -115,16 +173,37 @@ return {
         },
         eslint = {},
         ts_ls = {
-          -- Native (nvim 0.11) root_dir signature: (bufnr, on_dir). Prefer the git root
-          -- (single tsserver across the monorepo), else nearest tsconfig/package.json.
+          -- Native (nvim 0.11) root_dir signature: (bufnr, on_dir).
+          --
+          -- Scope tsserver to vim-rooter's project root, not to the nearest tsconfig.json: the
+          -- monorepos contain nested tsconfig.json files that are not the effective config for a
+          -- given file, so a nearest-match search picks the wrong project. Rooter already resolves
+          -- the root for the window (see custom/plugins/init.lua), which makes `.vim_rooter` the
+          -- one knob for both: dropping that marker at a sub-project boundary narrows nvim's cwd
+          -- and tsserver's program together, instead of loading a whole monorepo as one program.
+          --
+          -- Resolve with vim.fs.root() rather than getcwd(): rooter chdirs with `lcd`
+          -- (window-local) and this callback can run for a buffer that is not in the current
+          -- window.
           root_dir = function(bufnr, on_dir)
+            -- Hand the tsgo trial roots over exclusively; two TypeScript servers on one buffer
+            -- would double the memory this is meant to reduce.
+            if tsgo_root_for(bufnr) then
+              return
+            end
             local fname = vim.api.nvim_buf_get_name(bufnr)
-            local dir = vim.fs.root(fname, '.git') or vim.fs.root(fname, { 'tsconfig.json', 'package.json' })
-            on_dir(dir or vim.fs.dirname(fname))
+            local patterns = vim.g.rooter_patterns or { '.vim_rooter', '.git' }
+            on_dir(vim.fs.root(fname, patterns) or vim.fs.dirname(fname))
           end,
           init_options = {
             -- Need to use when specific tsconfig to be chosen like atom/stockscreener
             -- tsconfig = vim.fn.getcwd() .. '/tsconfig.json',
+            --
+            -- tsserver grows to whatever it is allowed to and never gives it back: measured 3.5GB
+            -- (stockscreener) and 2.0GB (security_director) after ~6 days. The cap makes it collect
+            -- instead of grow. Type acquisition adds @types downloads for untyped deps on top.
+            maxTsServerMemory = 3072,
+            disableAutomaticTypingAcquisition = true,
           },
         },
         jdtls = {
