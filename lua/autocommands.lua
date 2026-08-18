@@ -93,6 +93,10 @@ local RESTORE_DELAY_MS = 150
 -- as the user-visible flag.)
 local suspended = {}
 
+-- Highlighter objects parked while their buffer is suspended, keyed by buffer. See `suspend()`
+-- for why they are stashed rather than destroyed.
+local stashed_hl = {}
+
 -- A single timer, cancelled by bumping `generation`: `timer:stop()` cannot un-queue a tick that
 -- `schedule_wrap` has already handed to the main loop, so the callback has to check whether it is
 -- still the current one.
@@ -134,13 +138,24 @@ local function suspend(buf)
   local had_ts = vim.treesitter.highlighter.active[buf] ~= nil
   vim.b[buf].saved_ts = had_ts
   if had_ts then
-    -- Stopping the highlighter fires the `syntaxset` FileType autocmd, which switches full regex
-    -- syntax on -- expensive on a file this size. Blank it again, then put back just our own
-    -- rules: the assignment triggers `syn clear`, which would otherwise drop them for good.
-    local saved_syntax = vim.bo[buf].syntax
-    pcall(vim.treesitter.stop, buf)
-    vim.bo[buf].syntax = saved_syntax
-    mdsyntax.apply(buf)
+    -- Pause by parking the highlighter outside `TSHighlighter.active`. That table is what
+    -- `TSHighlighter._on_win` gates on, so the decoration provider skips this buffer entirely and
+    -- no parse runs while typing -- the same 30x win as before (40 chars into a 1.75MB markdown
+    -- buffer: 11.06s highlighted vs 0.33s paused).
+    --
+    -- Deliberately NOT `vim.treesitter.stop()`. That destroys the highlighter, and the next
+    -- `vim.treesitter.start()` builds a new one whose constructor calls `tree:register_cbs()` on
+    -- the *cached* LanguageTree -- while `TSHighlighter:destroy()` never unregisters (nvim has no
+    -- unregister API at all). Every stop/start round trip therefore appended another callback set
+    -- (measured 4 -> 14 -> 54 over 50 cycles), each keeping a stale highlighter alive and re-running
+    -- on every subsequent parse. Cost: ~75,500 allocations (~7.5MB) leaked per insert/Esc cycle,
+    -- unreclaimable by `collectgarbage()`, which is what grew these sessions to 8.9GB. Parking the
+    -- object instead reuses one highlighter for the buffer's lifetime: measured -8 allocs/cycle.
+    --
+    -- Not touching 'syntax' either: only `destroy()` fired the `syntaxset` FileType autocmd, so
+    -- there is no longer a regex-syntax switch-on to undo, and our mdsyntax rules stay applied.
+    stashed_hl[buf] = vim.treesitter.highlighter.active[buf]
+    vim.treesitter.highlighter.active[buf] = nil
   end
 end
 
@@ -154,10 +169,12 @@ local function restore(buf)
   end
   vim.b[buf].render_suspended = false
   vim.bo[buf].indentexpr = vim.b[buf].saved_indentexpr or ''
-  if vim.b[buf].saved_ts then
-    pcall(vim.treesitter.start, buf)
-    -- `vim.treesitter.start` blanks 'syntax' again, so our rules need re-applying here too.
-    mdsyntax.apply(buf)
+  if vim.b[buf].saved_ts and stashed_hl[buf] then
+    vim.treesitter.highlighter.active[buf] = stashed_hl[buf]
+    stashed_hl[buf] = nil
+    -- Putting the highlighter back schedules no work by itself, so ask for a redraw: `_on_win`
+    -- then re-runs and picks up everything typed while paused.
+    pcall(vim.api.nvim__redraw, { buf = buf, valid = false })
   end
   render_markdown_set(buf, true)
 end
@@ -227,6 +244,9 @@ autocmd({ 'BufEnter', 'CursorHold' }, {
 autocmd('BufDelete', {
   callback = function(ctx)
     suspended[ctx.buf] = nil
+    -- A buffer deleted mid-suspend would otherwise strand its parked highlighter here, keeping the
+    -- highlighter and its LanguageTree reachable for the rest of the session.
+    stashed_hl[ctx.buf] = nil
   end,
 })
 
