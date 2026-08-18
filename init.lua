@@ -130,14 +130,9 @@ vim.opt.mouse = 'a'
 -- Don't show the mode, since it's already in the status line
 vim.opt.showmode = false
 
--- Sync clipboard between OS and Neovim.
---  Schedule the setting after `UiEnter` because it can increase startup-time.
---  Remove this option if you want your OS clipboard to remain independent.
---  See `:help 'clipboard'`
-vim.schedule(function()
-  -- [ ] Problem is that generally copy from Mac and then come to vim to delete text to replace but thats overriding clipboard selection
-  -- vim.opt.clipboard = 'unnamedplus'
-end)
+-- 'clipboard' is intentionally NOT set to 'unnamedplus'. See `:help 'clipboard'`.
+-- [ ] Problem is that generally copy from Mac and then come to vim to delete text to replace but thats overriding clipboard selection
+-- Yanks are still mirrored to the OS clipboard by the TextYankPost autocmd at the bottom of this file.
 
 -- Enable break indent
 -- Don't wrapped lines visually indented to align with the indentation of the original line
@@ -235,26 +230,6 @@ vim.keymap.set('t', '<Esc><Esc>', '<C-\\><C-n>', { desc = 'Exit terminal mode' }
 -- vim.keymap.set('n', '<C-l>', '<C-w><C-l>', { desc = 'Move focus to the right window' })
 -- vim.keymap.set('n', '<C-j>', '<C-w><C-j>', { desc = 'Move focus to the lower window' })
 -- vim.keymap.set('n', '<C-k>', '<C-w><C-k>', { desc = 'Move focus to the upper window' })
-
--- Smart paste: characterwise register ending with \n pastes as a new line (linewise)
-local function smart_paste(key)
-  local reg = vim.v.register == '' and '"' or vim.v.register
-  local content = vim.fn.getreg(reg)
-  local reg_type = vim.fn.getregtype(reg)
-  if reg_type == 'v' and content:sub(-1) == '\n' then
-    vim.fn.setreg(reg, content, 'l')
-    vim.cmd('normal! ' .. (vim.v.register == '' and '' or '"' .. vim.v.register) .. key)
-    vim.fn.setreg(reg, content, 'v')
-  else
-    vim.cmd('normal! ' .. (vim.v.register == '' and '' or '"' .. vim.v.register) .. key)
-  end
-end
-vim.keymap.set('n', 'p', function()
-  smart_paste 'p'
-end, { desc = 'Smart paste below' })
-vim.keymap.set('n', 'P', function()
-  smart_paste 'P'
-end, { desc = 'Smart paste above' })
 
 -- [[ Basic Autocommands ]]
 --  See `:help lua-guide-autocommands`
@@ -752,27 +727,35 @@ local python_path = '/home/nagakirank/.venvs/testenv/bin/python'
 if vim.fn.filereadable(python_path) == 1 then
   vim.g.python3_host_prog = python_path
 end
-if vim.env.TMUX then
-  vim.g.clipboard = {
-    name = 'tmux',
-    copy = {
-      ['+'] = 'tmux load-buffer -',
-      ['*'] = 'tmux load-buffer -',
-    },
-    paste = {
-      ['+'] = 'tmux save-buffer -',
-      ['*'] = 'tmux save-buffer -',
-    },
-    cache_enabled = 0,
-  }
-  vim.opt.clipboard = 'unnamedplus'
-end
-
+-- 'clipboard' is deliberately left empty (see the note near the top of this file), so p/P/d/c
+-- always use the unnamed register and can never be affected by a clipboard round trip.
+--
+-- Mirror yanks to the outer terminal's clipboard (Mac) via OSC 52, so text yanked over ssh can be
+-- pasted with Cmd-V. This covers plain `yy` as well as an explicit "+y / "*y: nvim's own clipboard
+-- provider is not relied on for reaching the Mac, because inside tmux `tmux load-buffer -w` only
+-- forwards to the outer terminal when tmux has the `Ms` capability for $TERM, and because nvim
+-- prefers xsel/xclip over tmux whenever $DISPLAY is set (X11 forwarding), which would silently
+-- park the yank in an X selection on the remote box. OSC 52 goes straight to the terminal.
+--
+-- Deletes/changes are skipped on purpose so replacing text in nvim doesn't clobber what was copied
+-- on the Mac, and so are named registers ("ay).
+--
+-- The trailing empty item matters: without it the payload loses the linewise newline, tmux
+-- (set-clipboard on) turns the OSC 52 write into a newline-less paste buffer, and a later read of
+-- + comes back characterwise -- which is what used to make `yy` then `p` paste mid-line.
+local osc52_mirror_regs = { [''] = true, ['"'] = true, ['+'] = true, ['*'] = true }
 vim.api.nvim_create_autocmd('TextYankPost', {
+  group = vim.api.nvim_create_augroup('yank-to-osc52', { clear = true }),
   callback = function()
-    local copy_to_unnamedplus = require('vim.ui.clipboard.osc52').copy '+'
-    copy_to_unnamedplus(vim.v.event.regcontents)
-    local copy_to_unnamed = require('vim.ui.clipboard.osc52').copy '*'
-    copy_to_unnamed(vim.v.event.regcontents)
+    local ev = vim.v.event
+    if ev.operator ~= 'y' or not osc52_mirror_regs[ev.regname] then
+      return
+    end
+    local lines = vim.deepcopy(ev.regcontents)
+    if ev.regtype == 'V' then
+      lines[#lines + 1] = '' -- linewise => payload must end in a newline
+    end
+    local copy_to_clipboard = require('vim.ui.clipboard.osc52').copy '+'
+    copy_to_clipboard(lines)
   end,
 })
