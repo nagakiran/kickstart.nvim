@@ -42,6 +42,170 @@ return {
         end,
       })
 
+      -- `textDocument/hover` renders whatever the server chooses to send, and tsserver/tsgo (like
+      -- gopls and pyright) send the signature plus the doc comment — never the body. Reading the
+      -- implementation without leaving the buffer means asking for the definition instead and
+      -- showing the source lines at the target. Falls back to hover when there is no definition
+      -- (a type-only symbol, a keyword).
+
+      -- Caps the *window*, not the contents: the buffer holds the whole declaration and the float
+      -- scrolls (see attach_scrollbar).
+      local PEEK_MAX_HEIGHT = 30
+      -- Without a parser there is no way to know where the declaration ends, so show a fixed span.
+      local PEEK_FALLBACK_LINES = 60
+
+      -- A plain Location — and a LocationLink from a server that reports only the name's range —
+      -- points at the identifier, not the declaration. Walk up to the outermost syntax node that
+      -- still starts on that line to recover the whole function/class body.
+      local function expand_to_declaration(bufnr, srow, scol)
+        local ok, node = pcall(vim.treesitter.get_node, { bufnr = bufnr, pos = { srow, scol } })
+        if not ok or not node then
+          return srow, srow + PEEK_FALLBACK_LINES - 1
+        end
+        while true do
+          local parent = node:parent()
+          -- Stop below the root, or it would swallow the entire file for a line-0 declaration.
+          if not parent or not parent:parent() or parent:start() ~= srow then
+            break
+          end
+          node = parent
+        end
+        local nsrow, _, nerow = node:range()
+        return nsrow, nerow
+      end
+
+      local peek_scroll_ns = vim.api.nvim_create_namespace 'peek-definition-scrollbar'
+
+      -- Floats have no native scrollbar, and a preview capped at PEEK_MAX_HEIGHT gives no hint that
+      -- there is more below. Draw one in a one-column companion float pinned over the preview's
+      -- right border, redrawn on every scroll of the preview window.
+      local function attach_scrollbar(fwin)
+        if vim.w[fwin].peek_scrollbar then
+          return
+        end
+        local height = vim.api.nvim_win_get_height(fwin)
+        local total = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(fwin))
+        if total <= height then
+          return
+        end
+
+        local sbuf = vim.api.nvim_create_buf(false, true)
+        vim.bo[sbuf].bufhidden = 'wipe'
+        -- Blank cells: the bar is painted with line highlights, so it renders as a solid block in
+        -- the colorscheme's own Pmenu scrollbar colours.
+        local track = {}
+        for _ = 1, height do
+          track[#track + 1] = ' '
+        end
+        vim.api.nvim_buf_set_lines(sbuf, 0, -1, false, track)
+
+        local swin = vim.api.nvim_open_win(sbuf, false, {
+          -- 'win'-relative coordinates start at the text area, so col == width is the border cell.
+          relative = 'win',
+          win = fwin,
+          row = 0,
+          col = vim.api.nvim_win_get_width(fwin),
+          width = 1,
+          height = height,
+          focusable = false,
+          style = 'minimal',
+          noautocmd = true,
+          zindex = (vim.api.nvim_win_get_config(fwin).zindex or 50) + 1,
+        })
+        vim.wo[swin].winhighlight = 'Normal:PmenuSbar,NormalFloat:PmenuSbar'
+        vim.w[fwin].peek_scrollbar = swin
+
+        local function redraw()
+          if not (vim.api.nvim_win_is_valid(fwin) and vim.api.nvim_win_is_valid(swin)) then
+            return
+          end
+          local topline = vim.fn.line('w0', fwin)
+          local size = math.max(1, math.floor(height * height / total + 0.5))
+          local pos = math.floor((topline - 1) * (height - size) / (total - height) + 0.5)
+          vim.api.nvim_buf_clear_namespace(sbuf, peek_scroll_ns, 0, -1)
+          for row = pos, math.min(pos + size, height) - 1 do
+            vim.api.nvim_buf_set_extmark(sbuf, peek_scroll_ns, row, 0, { line_hl_group = 'PmenuThumb' })
+          end
+        end
+        redraw()
+
+        local group = vim.api.nvim_create_augroup('peek-definition-scrollbar-' .. fwin, { clear = true })
+        vim.api.nvim_create_autocmd('WinScrolled', { group = group, pattern = tostring(fwin), callback = redraw })
+        vim.api.nvim_create_autocmd('WinClosed', {
+          group = group,
+          pattern = tostring(fwin),
+          callback = function()
+            if vim.api.nvim_win_is_valid(swin) then
+              vim.api.nvim_win_close(swin, true)
+            end
+            -- Deferred: deleting the group from inside one of its own callbacks.
+            vim.schedule(function()
+              pcall(vim.api.nvim_del_augroup_by_id, group)
+            end)
+          end,
+        })
+      end
+
+      local function peek_definition()
+        local win = vim.api.nvim_get_current_win()
+        vim.lsp.buf_request_all(0, vim.lsp.protocol.Methods.textDocument_definition, function(client)
+          return vim.lsp.util.make_position_params(win, client.offset_encoding)
+        end, function(results)
+          local target
+          for _, res in pairs(results) do
+            local r = res.result
+            if type(r) == 'table' then
+              -- Location | LocationLink | (Location|LocationLink)[]
+              target = (r.uri or r.targetUri) and r or r[1]
+              if target then
+                break
+              end
+            end
+          end
+
+          if not target then
+            vim.lsp.buf.hover()
+            return
+          end
+
+          local uri = target.targetUri or target.uri
+          local range = target.targetRange or target.range
+          local bufnr = vim.uri_to_bufnr(uri)
+          vim.fn.bufload(bufnr)
+
+          local srow, erow = range.start.line, range['end'].line
+          if erow - srow < 1 then
+            srow, erow = expand_to_declaration(bufnr, srow, range.start.character)
+          end
+          local lines = vim.api.nvim_buf_get_lines(bufnr, srow, erow + 1, false)
+          if #lines == 0 then
+            return
+          end
+
+          local ft = vim.bo[bufnr].filetype
+          local fbuf, fwin = vim.lsp.util.open_floating_preview(lines, ft, {
+            border = 'rounded',
+            -- Same contract as hover: closes on cursor move, and pressing the key a second time
+            -- jumps into the float (so its contents can be scrolled or yanked).
+            focus_id = 'peek-definition',
+            title = string.format('%s:%d', vim.fn.fnamemodify(vim.uri_to_fname(uri), ':~:.'), srow + 1),
+            max_height = PEEK_MAX_HEIGHT,
+            wrap = false,
+          })
+          -- Both of open_floating_preview's re-focus paths return an already-open float — and the
+          -- one taken from inside the float returns the *source* buffer and window. Only touch a
+          -- float we just built.
+          if vim.bo[fbuf].buftype ~= 'nofile' then
+            return
+          end
+          -- open_floating_preview sets 'syntax', which does not fire FileType, so treesitter never
+          -- starts (see the global FileType hook in custom/plugins/treesitter.lua). Set the option
+          -- that does.
+          vim.bo[fbuf].filetype = ft
+          attach_scrollbar(fwin)
+        end)
+      end
+
       vim.api.nvim_create_autocmd('LspAttach', {
         group = vim.api.nvim_create_augroup('kickstart-lsp-attach', { clear = true }),
         callback = function(event)
@@ -71,6 +235,7 @@ return {
           map('gD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
           -- will be useful to look at definition in a preview [good thing is hover goes away only on moving mouse and not like pressing Esc]
           map('<leader>ph', vim.lsp.buf.hover, 'LS[P] [H]over')
+          map('<leader>pd', peek_definition, '[P]eek [D]efinition body')
 
           local client = vim.lsp.get_client_by_id(event.data.client_id)
           if client and client:supports_method(vim.lsp.protocol.Methods.textDocument_inlayHint) then
@@ -133,7 +298,8 @@ return {
       -- rest of the setup keeps the known-good ts_ls; widen TSGO_ROOTS once it has proven itself.
       -- Configured outside `servers` (like gopls) because mason has no package for it and
       -- mason-tool-installer installs every key of that table.
-      local TSGO_ROOTS = { '/opt/nagki/myprojs/stockscreener' }
+      local TSGO_ROOTS =
+        { '/opt/nagki/myprojs/stockscreener', '/Users/nagakiran/stormbreaker/security_director', '/Users/nagakiran/stormbreaker/security_director/naas/sd/ui' }
 
       local function tsgo_root_for(bufnr)
         local fname = vim.api.nvim_buf_get_name(bufnr)
