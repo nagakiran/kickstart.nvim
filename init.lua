@@ -439,6 +439,11 @@ require('lazy').setup({
         if vim.bo[bufnr].filetype == 'taskedit' then
           return nil
         end
+        -- Markdown is formatted on demand only (<leader>f), so vimwiki/taskwiki
+        -- notes are never rewritten by prettier just because they were saved
+        if vim.bo[bufnr].filetype == 'markdown' then
+          return nil
+        end
         -- Disable "format_on_save lsp_fallback" for languages that don't
         -- have a well standardized coding style. You can add additional
         -- languages here or re-enable it for the disabled ones.
@@ -474,6 +479,7 @@ require('lazy').setup({
         -- [ "typescriptreact,typescript" ] = { 'prettierd', 'prettier', stop_after_first = true },
         typescript = { 'prettierd', 'prettier', stop_after_first = true },
         typescriptreact = { 'prettierd', 'prettier', stop_after_first = true },
+        markdown = { 'prettierd', 'prettier', stop_after_first = true },
         json = { 'prettierd', 'prettier', stop_after_first = true },
         jsonc = { 'prettierd', 'prettier', stop_after_first = true },
         less = { 'prettierd', 'prettier', stop_after_first = true },

@@ -51,6 +51,10 @@ return {
           concealcursor = { rendered = 'nc' },
         },
         html = { enabled = false },
+        -- Tables are formatted with prettier, so the source already carries column
+        -- padding. The default 'padded' counts that whitespace when sizing columns
+        -- and widens the render further; 'trimmed' subtracts it.
+        pipe_table = { cell = 'trimmed' },
         render_modes = { 'n', 'c', 't', 'i' },
         file_types = { 'markdown', 'typescriptreact', 'Avante', 'codecompanion', 'gitcommit' },
         injections = {
