@@ -293,6 +293,8 @@ vim.opt.rtp:prepend(lazypath)
 require 'tabline'
 require 'globals'
 require 'autocommands'
+require 'bufreap'
+require 'leakguard'
 require 'vim'
 
 -- [[ Configure and install plugins ]]

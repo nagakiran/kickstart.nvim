@@ -12,16 +12,24 @@ local M = {}
 
 M.threshold = 400 * 1024
 
---- Byte size of the file backing `buf`, or 0 when it has none (scratch, terminal, unwritten).
+--- Byte size of `buf`: the file backing it when there is one, otherwise the text it holds.
+---
+--- The in-memory fallback is what makes this correct for scratch buffers. Picker previewers fill a
+--- `nofile` buffer with a whole file and either leave it unnamed or name it something synthetic
+--- (fzf-lua uses `<bufnr>/<path>`, which never exists on disk), so a name-based `fs_stat` reports 0
+--- for exactly the buffers carrying the most text -- and every consumer of `is_heavy` then treated
+--- a 56,000-line ledger preview as a small buffer. cmp-buffer indexed 35 such copies at once.
 ---@param buf integer
 ---@return integer
 function M.size(buf)
   local name = vim.api.nvim_buf_get_name(buf)
-  if name == '' then
-    return 0
+  local stat = name ~= '' and vim.uv.fs_stat(name) or nil
+  if stat then
+    return stat.size
   end
-  local stat = vim.uv.fs_stat(name)
-  return stat and stat.size or 0
+  -- `nvim_buf_get_offset` returns -1 for an unloaded buffer.
+  local ok, bytes = pcall(vim.api.nvim_buf_get_offset, buf, vim.api.nvim_buf_line_count(buf))
+  return (ok and bytes > 0) and bytes or 0
 end
 
 ---@param buf integer

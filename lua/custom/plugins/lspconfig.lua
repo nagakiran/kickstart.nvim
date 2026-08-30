@@ -28,17 +28,38 @@ return {
 
       -- Servers outlive the buffers that started them: a tsserver was still resident 6 days after
       -- its last TypeScript buffer closed, holding 3.5GB. Stop any client left with no attachments.
+      --
+      -- One shared timer, restarted on each event, rather than `vim.defer_fn` per event: buffers
+      -- are closed in bursts (`bufreap`'s sweep retired 278 in one go, `:%bwipeout` does the same),
+      -- and a timer per buffer meant hundreds of live handles plus hundreds of redundant full
+      -- client scans 5s later. Restarting one timer collapses a burst into a single scan.
+      local idle_timer = vim.uv.new_timer()
       vim.api.nvim_create_autocmd({ 'BufDelete', 'BufUnload' }, {
         group = vim.api.nvim_create_augroup('lsp-idle-shutdown', { clear = true }),
         desc = 'Stop LSP clients once nothing is attached to them',
         callback = function()
-          vim.defer_fn(function()
-            for _, client in ipairs(vim.lsp.get_clients()) do
-              if next(client.attached_buffers or {}) == nil then
-                client:stop()
+          idle_timer:stop()
+          idle_timer:start(
+            5000,
+            0,
+            vim.schedule_wrap(function()
+              for _, client in ipairs(vim.lsp.get_clients()) do
+                if next(client.attached_buffers or {}) == nil then
+                  client:stop()
+                end
               end
-            end
-          end, 5000)
+            end)
+          )
+        end,
+      })
+
+      vim.api.nvim_create_autocmd('VimLeavePre', {
+        group = vim.api.nvim_create_augroup('lsp-idle-shutdown-teardown', { clear = true }),
+        callback = function()
+          idle_timer:stop()
+          if not idle_timer:is_closing() then
+            idle_timer:close()
+          end
         end,
       })
 

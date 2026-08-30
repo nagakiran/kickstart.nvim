@@ -61,13 +61,18 @@ return {
           { name = 'path' },
           -- To search across all buffers, minus the oversized ones: cmp re-filters the whole
           -- word index on every keystroke, and a single big notes file contributes ~20k words.
+          --
+          -- Real, listed file buffers only. Picker previewers leave behind hidden `nofile` copies
+          -- of whatever was scrolled past, and indexing those meant cmp-buffer holding a word list
+          -- for dozens of near-identical copies of the same ledger file -- ~4.5M table nodes in one
+          -- long-lived session. `bufreap.lua` deletes them, this keeps them out in the meantime.
           {
             name = 'buffer',
             option = {
               get_bufnrs = function()
                 local bigbuf = require 'bigbuf'
                 return vim.tbl_filter(function(buf)
-                  return vim.api.nvim_buf_is_loaded(buf) and not bigbuf.is_heavy(buf)
+                  return vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buftype == '' and vim.bo[buf].buflisted and not bigbuf.is_heavy(buf)
                 end, vim.api.nvim_list_bufs())
               end,
             },
