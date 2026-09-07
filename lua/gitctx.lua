@@ -97,17 +97,30 @@ function M.root_for_buf(bufnr)
   return ctx and ctx.root or vim.fn.getcwd()
 end
 
--- Buffer name for `relpath` at `rev`, e.g. 'fugitive://…//<sha>/lua/init.lua'.
--- `gitdir` defaults to the current buffer's. Returns nil if fugitive can't resolve it.
-function M.blob_name(rev, relpath, gitdir)
+-- Buffer name for the fugitive object `object` ('<sha>:<path>' for a file, '<sha>' for the
+-- commit itself), e.g. 'fugitive://…//<sha>/lua/init.lua'. `gitdir` defaults to the current
+-- buffer's. Returns nil if fugitive can't resolve it.
+local function object_name(object, gitdir)
   if not has_fugitive() then
     return nil
   end
-  local ok, name = pcall(vim.fn.FugitiveFind, rev .. ':' .. relpath, gitdir or vim.fn.FugitiveGitDir())
+  local ok, name = pcall(vim.fn.FugitiveFind, object, gitdir or vim.fn.FugitiveGitDir())
   if not ok or name == '' then
     return nil
   end
   return name
+end
+
+-- Buffer name for `relpath` at `rev`, e.g. 'fugitive://…//<sha>/lua/init.lua'.
+function M.blob_name(rev, relpath, gitdir)
+  return object_name(rev .. ':' .. relpath, gitdir)
+end
+
+-- Buffer name for the commit `rev` itself, e.g. 'fugitive://…//<sha>'. Opening this gives a
+-- fugitive commit buffer (b:fugitive_type == 'commit') rather than a scratch `git show` dump,
+-- so :GBrowse resolves to the commit's web URL and <CR>/gf on a diff path jumps to the blob.
+function M.commit_name(rev, gitdir)
+  return object_name(rev, gitdir)
 end
 
 -- Does `rev:relpath` exist? Guards opening blobs for files added/deleted on one side of a
@@ -117,24 +130,39 @@ function M.object_exists(root, rev, relpath)
   return vim.v.shell_error == 0
 end
 
--- Open `rev:relpath` as a fugitive blob using `open_cmd` ('tabedit', 'edit', ...) and tag the
--- resulting buffer with `label` (shown by the tabline). Returns true on success; notifies and
--- returns false otherwise.
-function M.open_blob(gitdir, rev, relpath, open_cmd, label)
-  local name = M.blob_name(rev, relpath, gitdir)
+-- Open the fugitive buffer `name` (already resolved) with `open_cmd` ('tabedit', 'edit', ...).
+-- `what` only names the object in the failure message. Returns true on success.
+local function open_name(name, what, open_cmd)
   if not name then
-    vim.notify('Could not resolve ' .. rev .. ':' .. relpath, vim.log.levels.WARN)
+    vim.notify('Could not resolve ' .. what, vim.log.levels.WARN)
     return false
   end
   local ok, err = pcall(vim.cmd, open_cmd .. ' ' .. vim.fn.fnameescape(name))
   if not ok then
-    vim.notify('Failed to open ' .. rev .. ':' .. relpath .. ' — ' .. tostring(err), vim.log.levels.WARN)
+    vim.notify('Failed to open ' .. what .. ' — ' .. tostring(err), vim.log.levels.WARN)
+    return false
+  end
+  return true
+end
+
+-- Open `rev:relpath` as a fugitive blob using `open_cmd` ('tabedit', 'edit', ...) and tag the
+-- resulting buffer with `label` (shown by the tabline). Returns true on success; notifies and
+-- returns false otherwise.
+function M.open_blob(gitdir, rev, relpath, open_cmd, label)
+  local object = rev .. ':' .. relpath
+  if not open_name(M.blob_name(rev, relpath, gitdir), object, open_cmd) then
     return false
   end
   if label then
     vim.b.juniper_label = label
   end
   return true
+end
+
+-- Open the commit `rev` itself as a fugitive commit buffer (message + full multi-file diff),
+-- the same buffer `:Git` status opens on <CR>. Returns true on success.
+function M.open_commit(gitdir, rev, open_cmd)
+  return open_name(M.commit_name(rev, gitdir), 'commit ' .. rev:sub(1, 7), open_cmd)
 end
 
 return M

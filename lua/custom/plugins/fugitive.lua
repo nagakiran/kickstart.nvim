@@ -9,6 +9,15 @@ return {
           vim.fn['fugitive#DiffClose']()
         end
       end, { silent = true, desc = 'Close diff windows' })
+
+      -- :GBrowse hands the URL to :Browse when one exists, and only falls back to netrw
+      -- otherwise. nvim 0.12's netrw narrowed netrw#BrowseX(fname, remote) to
+      -- netrw#BrowseX(fname), but fugitive still calls it with two arguments — so that
+      -- fallback dies with E118 and the browser never opens. Route it through vim.ui.open.
+      -- (nargs=1 args arrive raw, so '#L10' anchors survive.)
+      vim.api.nvim_create_user_command('Browse', function(opts)
+        vim.ui.open(opts.args)
+      end, { nargs = 1, desc = 'Open a URL (used by fugitive :GBrowse)' })
     end,
   },
   {

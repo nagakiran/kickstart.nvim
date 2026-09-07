@@ -216,7 +216,7 @@ return {
       -- Keybindings inside the picker:
       --   <CR>           → send all listed commits to the quickfix list
       --   <C-t>          → open the file snapshot at the selected commit in a new tab
-      --   <C-d>          → open the full commit diff (all files) in a scratch buffer/new tab
+      --   <C-d>          → open the whole commit (all files) as a fugitive commit buffer, new tab
       --   <C-v>          → side-by-side (vertical) diff of the commit vs its parent
       --   <C-x>          → stacked (horizontal) diff of the commit vs its parent
       --   <C-Space>      → cycle preview: stat+diff → message → diff (→ back)
@@ -227,25 +227,16 @@ return {
           map({ 'i', 'n' }, '<C-Space>', actions.cycle_previewers_next)
           map({ 'i', 'n' }, '<M-Space>', actions.cycle_previewers_prev)
 
-          -- <C-d>: open the WHOLE commit's diff (all files) in a scratch buffer in a new tab.
+          -- <C-d>: open the WHOLE commit (message + all files) in a new tab, as a fugitive
+          -- commit buffer rather than a scratch `git show` dump — fugitive then knows which
+          -- commit the buffer is, so :GBrowse opens the commit's web URL, <CR>/gf on a diff
+          -- path jumps to that file's blob, and dd/dv diff it.
           -- NOTE: this overrides telescope's default <C-d> (preview_scrolling_down) for these
           -- pickers; <C-u> (scroll up) and the other defaults remain.
           map({ 'i', 'n' }, '<C-d>', function()
             local selection = action_state.get_selected_entry()
             actions.close(prompt_bufnr)
-            local rev = selection.value
-            local content = vim.fn.systemlist { 'git', '-C', ctx.root, '--no-pager', 'show', rev }
-            if vim.v.shell_error ~= 0 then
-              vim.notify('Failed to fetch commit diff', vim.log.levels.ERROR)
-              return
-            end
-            vim.cmd 'tabnew'
-            local buf = vim.api.nvim_get_current_buf()
-            vim.api.nvim_buf_set_lines(buf, 0, -1, false, content)
-            vim.bo[buf].buftype = 'nofile' -- not backed by a real file
-            vim.bo[buf].bufhidden = 'wipe' -- clean up when the tab is closed
-            vim.bo[buf].filetype = 'git' -- highlights message + multi-file diff
-            vim.api.nvim_buf_set_name(buf, 'COMMIT:' .. rev:sub(1, 7))
+            gitctx.open_commit(ctx.gitdir, selection.value, 'tabedit')
           end)
 
           -- Open this file at the selected commit in a new tab. Returns the sha, or nil if

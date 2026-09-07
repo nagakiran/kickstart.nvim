@@ -2,6 +2,8 @@
 -- (fugitive://<gitdir>//<sha>/<path>) whose basename alone wouldn't say *which* revision
 -- you're looking at. Branch files opened by <leader>dF/<leader>dL carry b:juniper_label
 -- ('feat'/'base'); blobs opened from the <leader>sb picker fall back to the short sha.
+-- A fugitive *commit* buffer (fugitive://<gitdir>//<sha>, opened by <C-d> in that picker) has
+-- no path at all, so its basename is the full sha — label it 'COMMIT:<sha7>' instead.
 local function tab_label(bufnr)
   local name = vim.fn.bufname(bufnr)
   if name == '' then
@@ -11,11 +13,17 @@ local function tab_label(bufnr)
   if not name:match '^fugitive://' then
     return base
   end
+  -- FugitiveParse() -> { '<sha>:<path>' (or bare '<sha>' for a commit), '<gitdir>' };
+  -- it throws on malformed URLs.
+  local ok, parsed = pcall(vim.fn.FugitiveParse, name)
+  local object = ok and type(parsed) == 'table' and parsed[1] or nil
   local label = vim.b[bufnr].juniper_label
   if not label then
-    -- FugitiveParse() -> { '<sha>:<path>', '<gitdir>' }; it throws on malformed URLs.
-    local ok, parsed = pcall(vim.fn.FugitiveParse, name)
-    local sha = ok and type(parsed) == 'table' and parsed[1] and parsed[1]:match '^(%x+):'
+    local commit = object and object:match '^(%x%x%x%x%x%x%x+)$'
+    if commit then
+      return 'COMMIT:' .. commit:sub(1, 7)
+    end
+    local sha = object and object:match '^(%x+):'
     label = sha and sha:sub(1, 7) or 'git'
   end
   return base .. '[' .. label .. ']'
