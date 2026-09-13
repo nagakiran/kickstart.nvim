@@ -14,6 +14,7 @@ local ensure_installed = {
   'ssh_config',
   'tsx',
   'typescript',
+  'xml',
   'yaml',
 }
 

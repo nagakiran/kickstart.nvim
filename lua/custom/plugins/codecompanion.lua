@@ -19,7 +19,11 @@ return {
                     -- because a `free_limited_copilot` account serves *only* base models:
                     -- every Claude model and the whole GPT-5 family return `model_not_supported`
                     -- at request time there, even though /models lists them as policy-enabled.
-                    default = vim.g.cc_copilot_model or 'gpt-4.1',
+                    default = vim.g.cc_copilot_model or 'claude-sonnet-5',
+                    -- default = 'claude-haiku-4.5',
+                    -- default = 'claude-sonnet-4.6',
+                    -- default = 'claude-sonnet-5',
+                    -- default = 'gpt-5.4',
                   },
                 },
                 handlers = {
