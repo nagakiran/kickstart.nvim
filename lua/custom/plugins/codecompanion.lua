@@ -7,9 +7,34 @@ return {
       'ravitemer/codecompanion-history.nvim',
     },
     config = function()
+      -- The copilot adapter blocks every request on the /models list with a hardcoded 3s wait
+      -- (get_models.lua CONSTANTS.TIMEOUT), then logs "Timeout waiting for models" and carries on
+      -- without model info. /models normally answers in ~1s but spikes after sleep/network changes.
+      -- Start the fetch async and wait longer ourselves; once cached this returns immediately.
+      local get_models = require 'codecompanion.adapters.http.copilot.get_models'
+      local choices = get_models.choices
+      get_models.choices = function(adapter, opts)
+        if not (opts and opts.async == false) then
+          return choices(adapter, opts)
+        end
+        local async_opts = vim.tbl_extend('force', opts, { async = true })
+        if choices(adapter, async_opts) then
+          return choices(adapter, async_opts)
+        end
+        vim.wait(10000, function()
+          return choices(adapter, async_opts) ~= nil
+        end, 50)
+        return choices(adapter, async_opts)
+      end
+
       local my_config = {
         adapters = {
           http = {
+            opts = {
+              -- Default 1800s means the copilot adapter re-fetches /models every 30 min, blocking the
+              -- next request on it. The list changes rarely; once a day is enough.
+              cache_models_for = 86400,
+            },
             copilot = function()
               return require('codecompanion.adapters').extend('copilot', {
                 schema = {
@@ -111,7 +136,9 @@ return {
           -- NOTE: only `chat` (and `cli`) support ACP adapters like claude_code.
           -- `inline`, `cmd` and `background` bail out on anything non-HTTP, so they stay on copilot.
           chat = {
-            adapter = 'claude_code',
+            -- Per machine via vim.g.cc_chat_adapter in lua/local_config.lua. Unset: use claude_code only
+            -- if its ACP binary is installed, otherwise it fails with ENOENT on 'claude-agent-acp'.
+            adapter = vim.g.cc_chat_adapter or (vim.fn.executable 'claude-agent-acp' == 1 and 'claude_code' or 'copilot'),
             roles = {
               llm = function(adapter)
                 local model = adapter.model

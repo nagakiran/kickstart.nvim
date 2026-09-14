@@ -10,5 +10,7 @@ vim.g.cc_copilot_model = 'gpt-4.1'
 -- Titles and summaries. Keep this on a base model even on paid plans: those are 0 premium
 -- requests, while Claude models bill 1x each, and chat titles aren't worth the quota.
 vim.g.cc_copilot_utility_model = 'gpt-4.1'
+-- Chat adapter: 'claude_code' or 'copilot'. nil = claude_code when `claude-agent-acp` is on PATH, else copilot.
+vim.g.cc_chat_adapter = nil
 
 pcall(require, 'local_config')
