@@ -132,6 +132,12 @@ return {
         --     })
         --   end,
         -- },
+        -- Own markdown prompts. Builtins win on alias clashes, so use distinct aliases (e.g. /commitmsg).
+        prompt_library = {
+          markdown = {
+            dirs = { vim.fn.stdpath 'config' .. '/prompts' },
+          },
+        },
         interactions = {
           -- NOTE: only `chat` (and `cli`) support ACP adapters like claude_code.
           -- `inline`, `cmd` and `background` bail out on anything non-HTTP, so they stay on copilot.
