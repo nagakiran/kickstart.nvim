@@ -130,9 +130,14 @@ vim.opt.mouse = 'a'
 -- Don't show the mode, since it's already in the status line
 vim.opt.showmode = false
 
--- 'clipboard' is intentionally NOT set to 'unnamedplus'. See `:help 'clipboard'`.
--- [ ] Problem is that generally copy from Mac and then come to vim to delete text to replace but thats overriding clipboard selection
--- Yanks are still mirrored to the OS clipboard by the TextYankPost autocmd at the bottom of this file.
+-- Locally, y/p go through the Mac clipboard (pbcopy/pbpaste), so `p` pastes text copied in the
+-- browser. Deletes/changes never reach it: lua/nocut.lua sends them to the blackhole register.
+-- Over ssh, reading + back is unreliable (see be96778), so 'clipboard' stays empty there: paste
+-- browser text with Cmd-V. Yanks still reach the Mac via the OSC 52 TextYankPost autocmd at the
+-- bottom of this file.
+if not vim.env.SSH_TTY then
+  vim.opt.clipboard = 'unnamedplus'
+end
 
 -- Enable break indent
 -- Don't wrapped lines visually indented to align with the indentation of the original line
@@ -275,6 +280,7 @@ require 'tabline'
 require 'globals'
 require 'autocommands'
 require 'bufreap'
+require 'nocut'
 require 'leakguard'
 require 'vim'
 
@@ -737,8 +743,8 @@ local python_path = '/home/nagakirank/.venvs/testenv/bin/python'
 if vim.fn.filereadable(python_path) == 1 then
   vim.g.python3_host_prog = python_path
 end
--- 'clipboard' is deliberately left empty (see the note near the top of this file), so p/P/d/c
--- always use the unnamed register and can never be affected by a clipboard round trip.
+-- Over ssh 'clipboard' is left empty (see the note near the top of this file), so p/P always use
+-- the unnamed register and can never be affected by a clipboard round trip.
 --
 -- Mirror yanks to the outer terminal's clipboard (Mac) via OSC 52, so text yanked over ssh can be
 -- pasted with Cmd-V. This covers plain `yy` as well as an explicit "+y / "*y: nvim's own clipboard
