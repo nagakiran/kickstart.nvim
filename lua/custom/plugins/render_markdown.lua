@@ -55,6 +55,16 @@ return {
         -- padding. The default 'padded' counts that whitespace when sizing columns
         -- and widens the render further; 'trimmed' subtracts it.
         pipe_table = { cell = 'trimmed' },
+        -- Priority tasks: `- [!]` high, `- [ ]` normal, `- [~]` low. These are custom
+        -- states, not GFM, so a finished task of any priority goes to `[x]`.
+        -- scope_highlight colours the task text too, not just the icon. `[-]` is left
+        -- to the plugin's built-in `todo` (in-progress) state.
+        checkbox = {
+          custom = {
+            high = { raw = '[!]', rendered = '\u{f0026} ', highlight = 'DiagnosticError', scope_highlight = 'DiagnosticError' },
+            low = { raw = '[~]', rendered = '\u{f0045} ', highlight = 'Comment', scope_highlight = 'Comment' },
+          },
+        },
         render_modes = { 'n', 'c', 't', 'i' },
         file_types = { 'markdown', 'typescriptreact', 'Avante', 'codecompanion', 'gitcommit' },
         injections = {
