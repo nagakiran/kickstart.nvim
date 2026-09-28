@@ -164,7 +164,7 @@ LSP keymaps:
 
 ## Important Notes
 
-- **Clipboard sync**: `unnamedplus` locally, empty over ssh (`init.lua:133`). `lua/nocut.lua` sends d/D/c/C/s/S (and select-mode typing) to the blackhole register so deleting text doesn't clobber what `p` pastes; x/X stay a real cut. Yanks reach the Mac over OSC 52 in both cases.
+- **Clipboard sync**: `unnamedplus` locally, empty over ssh (`init.lua:133`). `lua/nocut.lua` sends the operators in its `NOCUT_MAPS` list (currently c/C/s/S, plus select-mode typing) to the blackhole register so deleting text doesn't clobber what `p` pastes; d/D and x/X stay a real cut. Yanks reach the Mac over OSC 52 in both cases.
 - **Split behavior**: Splitright/splitbelow disabled (for specific window layout needs)
 - **Cursorline**: Disabled by default (can enable if needed)
 - **Auto-read**: Enabled to reload files changed externally, with checktime on cursor idle

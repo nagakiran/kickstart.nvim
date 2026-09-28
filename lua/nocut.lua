@@ -11,6 +11,7 @@
 -- typed.
 --
 -- x/X are left alone on purpose: they stay an explicit cut, so `xp` still swaps characters.
+-- Which operators get redirected is set in NOCUT_MAPS below.
 local DELETE_REG = '_'
 
 -- The register an operator uses when none was typed, given the current 'clipboard'.
@@ -24,8 +25,21 @@ local function default_reg()
   return '"'
 end
 
-for _, lhs in ipairs { 'd', 'D', 'c', 'C', 's', 'S' } do
-  vim.keymap.set({ 'n', 'x' }, lhs, function()
+-- Operators redirected to DELETE_REG, and the modes each applies in. Anything not listed keeps
+-- the stock behaviour (writes the default register).
+local NOCUT_MAPS = {
+  -- d/D stay a real cut for now: `ddp`-style "delete here, paste there" is too ingrained.
+  -- { lhs = 'd', modes = { 'n', 'x' } },
+  -- { lhs = 'D', modes = { 'n', 'x' } },
+  { lhs = 'c', modes = { 'n', 'x' } },
+  { lhs = 'C', modes = { 'n', 'x' } },
+  { lhs = 's', modes = { 'n', 'x' } },
+  { lhs = 'S', modes = { 'n', 'x' } },
+}
+
+for _, map in ipairs(NOCUT_MAPS) do
+  local lhs = map.lhs
+  vim.keymap.set(map.modes, lhs, function()
     if vim.v.register ~= default_reg() then
       return lhs -- explicit register: honour it
     end
