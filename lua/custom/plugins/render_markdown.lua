@@ -54,7 +54,11 @@ return {
         -- Tables are formatted with prettier, so the source already carries column
         -- padding. The default 'padded' counts that whitespace when sizing columns
         -- and widens the render further; 'trimmed' subtracts it.
-        pipe_table = { cell = 'trimmed' },
+        pipe_table = {
+          cell = 'trimmed',
+          -- Fit wide tables to the current window by wrapping individual cells.
+          wrap = true,
+        },
         -- Priority tasks: `- [!]` high, `- [ ]` normal, `- [~]` low. These are custom
         -- states, not GFM, so a finished task of any priority goes to `[x]`.
         -- scope_highlight colours the task text too, not just the icon. `[-]` is left
@@ -98,6 +102,9 @@ return {
         },
       }
 
+      -- Keep wrapped table rows rendered under the cursor outside insert mode.
+      require('render_markdown_cursor_row').setup()
+
       -- Custom command to toggle anti_conceal dynamically at runtime
       vim.api.nvim_create_user_command('RenderMarkdownToggleAntiConceal', function()
         local config = require('render-markdown.state').config
@@ -129,6 +136,52 @@ return {
           end)
         end)
       end, { range = '%', desc = 'Copy markdown as rich text (Outlook/Confluence/Teams)' })
+
+      -- Convert a box-drawn table (┌─┬─┐ │ … │, as printed by Claude Code and other CLIs) into a
+      -- markdown pipe table, which render-markdown can then render and wrap to the window.
+      -- Rows split across several `│` lines are joined back into one cell per column; the
+      -- ┌├└ border lines mark where one row ends and the next begins.
+      vim.api.nvim_create_user_command('BoxTableToMarkdown', function(opts)
+        local lines = vim.api.nvim_buf_get_lines(0, opts.line1 - 1, opts.line2, false)
+        local rows, cur = {}, nil
+        local function flush()
+          if cur then
+            rows[#rows + 1] = vim.tbl_map(function(parts)
+              return (table.concat(parts, ' '):gsub('|', '\\|'))
+            end, cur)
+            cur = nil
+          end
+        end
+        for _, line in ipairs(lines) do
+          local body = vim.trim(line)
+          if vim.startswith(body, '│') then
+            local cells = vim.split(body, '│', { plain = true })
+            -- drop the empty strings before the first and after the last bar
+            cells = vim.list_slice(cells, 2, #cells - 1)
+            cur = cur or vim.tbl_map(function()
+              return {}
+            end, cells)
+            for i, cell in ipairs(cells) do
+              cell = vim.trim(cell)
+              if cell ~= '' and cur[i] then
+                table.insert(cur[i], cell)
+              end
+            end
+          else
+            flush()
+          end
+        end
+        flush()
+        if #rows == 0 then
+          vim.notify('BoxTableToMarkdown: no │ rows in range', vim.log.levels.WARN)
+          return
+        end
+        local out = { '| ' .. table.concat(rows[1], ' | ') .. ' |', '|' .. string.rep('---|', #rows[1]) }
+        for i = 2, #rows do
+          out[#out + 1] = '| ' .. table.concat(rows[i], ' | ') .. ' |'
+        end
+        vim.api.nvim_buf_set_lines(0, opts.line1 - 1, opts.line2, false, out)
+      end, { range = '%', desc = 'Convert a box-drawn table to a markdown pipe table' })
 
       local rich_text_filetypes = { 'markdown', 'codecompanion', 'Avante', 'gitcommit' }
 
