@@ -3,7 +3,6 @@ return {
     'olimorris/codecompanion.nvim',
     dependencies = {
       'nvim-lua/plenary.nvim',
-      'ravitemer/mcphub.nvim', -- Add MCPHub as dependency
       'ravitemer/codecompanion-history.nvim',
     },
     config = function()
@@ -207,17 +206,7 @@ return {
           },
         },
 
-        -- MCPHub extension configuration
         extensions = {
-          mcphub = {
-            enabled = false,
-            callback = 'mcphub.extensions.codecompanion',
-            opts = {
-              show_result_in_chat = true, -- Show MCP tool results in chat
-              make_vars = true, -- Convert MCP resources to #variables
-              make_slash_commands = true, -- Add MCP prompts as /slash commands
-            },
-          },
           history = {
             enabled = true,
             opts = {

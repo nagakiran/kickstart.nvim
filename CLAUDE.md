@@ -39,7 +39,7 @@ lua/
 │   ├── lualine.lua     # Status line configuration
 │   ├── fzf.lua         # FZF integration
 │   ├── fugitive.lua    # Git integration
-│   ├── mcphub.lua      # MCP hub configuration
+│   ├── mcphub.lua      # MCP hub configuration (disabled)
 │   └── render_markdown.lua # Markdown rendering customization
 ├── kickstart/plugins/   # Kickstart builtin plugins (gitsigns, debug)
 ├── vim.lua             # Vim-specific settings
@@ -61,7 +61,7 @@ lazy-lock.json         # Plugin lock file (tracked in version control)
 3. **Leader Key**: `;` is used instead of space, allowing easier mapping of common commands.
 
 4. **AI Integration Stack**:
-   - **CodeCompanion**: Primary AI chat interface with MCP (Model Context Protocol) support via MCPHub
+   - **CodeCompanion**: Primary AI chat interface
    - **Copilot**: Inline code suggestions with `<M-l>` to accept, `<M-w>` for word, `<M-e>` for line
    - **Avante**: Alternative AI editing capabilities
    - CodeCompanion has a custom system prompt that enables diff formatting in code blocks
@@ -111,7 +111,6 @@ LSP keymaps:
 ## Custom Configuration Details
 
 ### CodeCompanion Setup (`lua/custom/plugins/codecompanion.lua`)
-- Uses **MCPHub** for MCP resource integration
 - **History extension** enabled with auto-save (30-day cleanup)
 - Custom system prompt that encourages diff formatting in code blocks
 - Chat window layout: vertical

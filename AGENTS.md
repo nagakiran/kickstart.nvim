@@ -231,12 +231,12 @@ lua/
   avante_config.lua             # Avante config helpers
   custom/plugins/               # Custom plugin specs (auto-discovered by lazy.nvim)
     init.lua                    # Primary plugin list
-    codecompanion.lua           # AI chat (CodeCompanion + MCPHub + history)
+    codecompanion.lua           # AI chat (CodeCompanion + history)
     avante.lua                  # AI editing (Avante)
     lualine.lua                 # Status line
     fzf.lua                     # FZF integration
     fugitive.lua                # Git (vim-fugitive)
-    mcphub.lua                  # MCP hub
+    mcphub.lua                  # MCP hub (disabled)
     render_markdown.lua         # Markdown rendering
   kickstart/plugins/            # Kickstart-provided plugin specs (do not heavily modify)
 after/ftplugin/                 # Filetype-specific settings

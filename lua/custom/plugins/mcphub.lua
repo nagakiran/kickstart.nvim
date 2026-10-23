@@ -1,6 +1,8 @@
 return {
   {
     'ravitemer/mcphub.nvim',
+    -- Disabled: not used, and its mcp-hub server held port 3000 (the SD webpack dev server's port).
+    enabled = false,
     dependencies = {
       'nvim-lua/plenary.nvim', -- Required for Job and HTTP requests
     },
