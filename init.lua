@@ -390,7 +390,7 @@ require('lazy').setup({
       -- Document existing key chains
       spec = {
         { '<leader>c', group = '[C]ode', mode = { 'n', 'x' } },
-        { '<leader>d', group = '[D]ocument' },
+        { '<leader>d', group = '[D]ocument / [D]iff' },
         { '<leader>r', group = '[R]ename' },
         { '<leader>s', group = '[S]earch' },
         { '<leader>w', group = '[W]orkspace' },
@@ -703,8 +703,8 @@ vim.api.nvim_set_hl(0, 'CopilotSuggestion', { fg = '#888888', italic = true })
 -- Activte myenv pyenv before launching nvim for this to work properly
 vim.g.python3_host_prog = os.getenv 'HOME' .. '/.pyenv/versions/myenv/bin/python'
 
--- Load Avante custom keymappings
-require 'avante_config'
+-- Avante is disabled (lua/custom/plugins/avante.lua); its keymaps would only register a dead <leader>a group
+-- require 'avante_config'
 require 'codecompanion_config'
 
 -- Convert current curl paragraph to .hurl format in-place

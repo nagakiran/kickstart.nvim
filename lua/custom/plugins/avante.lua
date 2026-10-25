@@ -3,7 +3,6 @@ return {
     'yetone/avante.nvim',
     enabled = false,
     event = 'VeryLazy',
-    enabled = false,
     -- lazy = false,
     version = false, -- set this if you want to always pull the latest change
     -- Being overriden with config = function()
