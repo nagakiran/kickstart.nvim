@@ -1,3 +1,18 @@
+-- copilot.lua needs Node 22+, and `node` on PATH can be an older nvm default (or absent when nvim is not
+-- started from a login shell). Use the newest nvm install of 22+, else whatever `node` PATH gives.
+-- scripts/install-deps.sh node installs one.
+local function copilot_node()
+  local best, best_version
+  local nvm_dir = vim.env.NVM_DIR or (vim.env.HOME .. '/.nvm')
+  for _, bin in ipairs(vim.fn.glob(nvm_dir .. '/versions/node/v*/bin/node', false, true)) do
+    local version = vim.version.parse(bin:match '/node/(v[^/]+)/')
+    if version and version.major >= 22 and (not best_version or vim.version.gt(version, best_version)) then
+      best, best_version = bin, version
+    end
+  end
+  return best or 'node'
+end
+
 return {
   {
     'zbirenbaum/copilot.lua',
@@ -16,7 +31,7 @@ return {
           trace_lsp_progress = false,
           log_lsp_messages = false,
         },
-        copilot_node_command = vim.fn.expand '$HOME' .. '/.nvm/versions/node/v22.21.1/bin/node',
+        copilot_node_command = copilot_node(),
         should_attach = function(bufnr, bufname)
           local filetype = vim.api.nvim_get_option_value('filetype', { buf = bufnr })
 

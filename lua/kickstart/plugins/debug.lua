@@ -95,6 +95,7 @@ return {
       ensure_installed = {
         -- Update this to ensure that you have the debuggers for the langs you want
         'delve',
+        'js', -- js-debug-adapter, for the pwa-node adapter below
       },
     }
 
@@ -143,13 +144,24 @@ return {
       args = { os.getenv 'HOME' .. '/.local/share/nvim/mason/packages/node-debug2-adapter/out/src/nodeDebug.js' },
     }
 
-    dap.adapters.node = {
-      type = 'executable',
-      command = 'node',
-      -- args = { os.getenv 'HOME' .. '/.local/share/nvim/mason/packages/js-debug-adapter/js-debug/src/dapDebugServer.js', '9229' },
-      -- args = { '/opt/nagki/apps/git/vscode-js-debug/src/dapDebugServer.ts', '9229' },
-      args = { '--max-old-space-size=4096', '-r', 'events', '/opt/nagki/apps/git/vscode-js-debug/dist/src/vsDebugServer.js', '9229' },
+    -- vscode-js-debug's standalone DAP server, from Mason (js-debug-adapter), so it exists on every machine.
+    -- Replaces a hand-built checkout under /opt/nagki that only this Mac had.
+    dap.adapters['pwa-node'] = {
+      type = 'server',
+      host = 'localhost',
+      port = '${port}',
+      executable = {
+        command = vim.fn.stdpath 'data' .. '/mason/bin/js-debug-adapter',
+        args = { '${port}' },
+      },
     }
+    -- The configurations below say type = 'node'; js-debug only accepts 'pwa-node'
+    dap.adapters.node = function(callback, config)
+      if config.type == 'node' then
+        config.type = 'pwa-node'
+      end
+      callback(dap.adapters['pwa-node'])
+    end
 
     -- dap.configurations.typescript = {
     --   {

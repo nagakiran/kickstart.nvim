@@ -8,6 +8,20 @@ This is a Neovim configuration based on [Kickstart.nvim](https://github.com/nvim
 
 **Leader key:** `;` (set in `init.lua:93`)
 
+## Portability: every change must work on every machine
+
+This repo is cloned as-is onto several machines, sometimes without rcfiles alongside it: this Mac (home `/Users/nagakiran`), a second Mac whose home is `/Users/nagakirank`, and Ubuntu boxes (Neovim from `scripts/install-nvim.sh`, since apt's is too old). It is also used over ssh. A change that only works here breaks the others silently, or with startup errors.
+
+- **No hardcoded home directories.** Use `vim.env.HOME`, `vim.fn.expand '~'` or `vim.fn.stdpath(...)`, never `/Users/nagakiran/...` or `/home/...`.
+- **Guard anything outside this repo.** A tool, venv, checkout or data dir (`/opt/nagki/...`, `~/textfiles/...`, a pyenv version, an nvm node) may be missing elsewhere. Check with `vim.fn.executable()` / `vim.uv.fs_stat()` and skip quietly when it is absent, rather than erroring at startup.
+- **OS-specific behaviour goes behind `vim.fn.has 'mac'` / `has 'linux'`**, and ssh-specific behaviour behind `vim.env.SSH_TTY` (as the clipboard setting already does).
+- **External binaries come from `PATH` or Mason**, not from a Homebrew prefix (`/opt/homebrew` is macOS arm64 only).
+- **`scripts/` must run on macOS and Linux** with bash and standard tools; no GNU-only or BSD-only flags without a check.
+
+Known exceptions (found 2026-10-30), both harmless but machine-specific: `init.lua:751` (`/home/nagakirank/...` python, guarded by `filereadable`) and `lspconfig.lua:323` (`TSGO_ROOTS`, a match list that is simply inert where those paths do not exist; the `/Users/nagakiran` entries should be `$HOME`-relative so they also match on the other Mac). The pyright `venvPath`, the hand-built js-debug adapter under `/opt/nagki` and the pinned Copilot node were fixed the same day: see the next paragraph.
+
+**External dependencies are installed by `scripts/install-deps.sh`** (pyenv + `myenv`, nvm + Node 22, build tools) and documented in README.md under "Dependencies of this config". When a change makes the config depend on something new outside Neovim, add it to that script and that table in the same commit, and make the config degrade quietly when it is absent. Prefer Mason for anything Mason packages (LSP servers, formatters, debug adapters): it needs no script at all.
+
 ## Common Development Commands
 
 ### Plugin Management
@@ -116,8 +130,8 @@ LSP keymaps:
 - Chat window layout: vertical
 - File slash command uses Telescope picker
 
-### Copilot Configuration (`lua/custom/plugins/init.lua`)
-- Node.js path: `/Users/nagakiran/.nvm/versions/node/v22.21.1/bin/node`
+### Copilot Configuration (`lua/custom/plugins/copilot.lua`)
+- Node.js: newest nvm install of Node 22+ (`copilot_node()`), else `node` from `PATH`
 - Auto-trigger suggestions after 75ms of inactivity
 - Enabled on codecompanion and ledger filetypes
 - Ghost text styling set explicitly (gray, italic)

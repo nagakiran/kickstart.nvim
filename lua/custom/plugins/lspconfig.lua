@@ -349,13 +349,12 @@ return {
       })
       vim.lsp.enable 'tsgo'
 
+      -- pyenv's myenv (scripts/install-deps.sh python) when it exists; otherwise pyright's own discovery
+      local pyenv_versions = (vim.env.PYENV_ROOT or (vim.env.HOME .. '/.pyenv')) .. '/versions'
       local servers = {
         pyright = {
           settings = {
-            python = {
-              venvPath = '/Users/nagakiran/.pyenv/versions',
-              venv = 'myenv',
-            },
+            python = vim.uv.fs_stat(pyenv_versions .. '/myenv') and { venvPath = pyenv_versions, venv = 'myenv' } or {},
           },
         },
         eslint = {},

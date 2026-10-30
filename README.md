@@ -36,6 +36,21 @@ External Requirements:
 > See [Install Recipes](#Install-Recipes) for additional Windows and Linux specific notes
 > and quick install snippets
 
+#### Dependencies of this config
+
+On top of the list above, this config uses a few things that live outside Neovim. `scripts/install-deps.sh` installs all of them on macOS (Homebrew) or Ubuntu/Debian (apt); every step is idempotent, `DRY_RUN=1` shows what it would do, and one step can be run on its own (`scripts/install-deps.sh node`).
+
+| Step | What | Used by | By hand |
+|---|---|---|---|
+| `system` | build tools, ripgrep, fd, xclip; on Linux also pyenv's Python build dependencies | telescope, treesitter, pyenv | macOS: `xcode-select --install; brew install ripgrep fd xz`. Ubuntu: the `apt_install` list in the script |
+| `pyenv` | [pyenv](https://github.com/pyenv/pyenv) | the next step | macOS: `brew install pyenv`. Linux: `curl -fsSL https://pyenv.run \| bash` |
+| `python` | pyenv Python 3.13.2 and a venv named `myenv` with `pynvim` | `python3_host_prog` (taskwiki and other Python plugins), pyright's `venv` | `pyenv install 3.13.2 && ~/.pyenv/versions/3.13.2/bin/python -m venv ~/.pyenv/versions/myenv && ~/.pyenv/versions/myenv/bin/pip install pynvim` |
+| `node` | [nvm](https://github.com/nvm-sh/nvm) and Node 22 | copilot.lua (needs 22+), and Mason's npm-based servers (ts_ls, pyright, eslint) | nvm's installer, then `nvm install 22` |
+
+Everything else (LSP servers, formatters, the JavaScript/TypeScript debug adapter `js-debug-adapter`) is installed by Mason on first start. Each of these is optional at runtime: without `myenv` pyright falls back to its own environment discovery, and without an nvm Node 22+ copilot.lua uses `node` from `PATH`.
+
+Set `PYTHON_VERSION`, `NODE_MAJOR`, `PYENV_ROOT` or `NVM_DIR` to change the defaults. The nvm installer runs with `PROFILE=/dev/null`, so it never edits your shell rc; add `export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"` and `eval "$(pyenv init -)"` there yourself.
+
 ### Install Kickstart
 
 > **NOTE**
@@ -208,6 +223,7 @@ apt's `neovim` is usually too old for this config. Install the dependencies from
 sudo apt update
 sudo apt install make gcc ripgrep unzip git xclip curl
 ~/.config/nvim/scripts/install-nvim.sh
+~/.config/nvim/scripts/install-deps.sh   # pyenv + myenv, nvm + Node 22: see "Dependencies of this config"
 ```
 
 Make sure `~/.local/bin` comes first in `PATH` (the script warns otherwise). On macOS the same script uses Homebrew (`--tarball` for the release build instead).
