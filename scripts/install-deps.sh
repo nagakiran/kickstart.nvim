@@ -8,8 +8,9 @@
 #   python   pyenv Python $PYTHON_VERSION and the 'myenv' venv with pynvim (python3_host_prog, pyright's venv)
 #   node     nvm and Node $NODE_MAJOR (copilot.lua needs 22+; Mason's npm-based servers need node on PATH)
 #   treesitter  the tree-sitter CLI $TS_MIN_VERSION+, which nvim-treesitter's main branch compiles parsers with
+#   fzf      fzf $FZF_MIN_VERSION+ for fzf-lua, cloned into ~/.fzf (the same checkout rcfiles' installFzf uses)
 # Environment: DRY_RUN=1 prints what would change; PYTHON_VERSION (default 3.13.2); NODE_MAJOR (default 22);
-#   BIN_DIR (default ~/.local/bin, where the Linux tree-sitter binary goes)
+#   BIN_DIR (default ~/.local/bin, where the Linux tree-sitter binary and the fzf link go)
 #
 # Every step is idempotent. A failing step is reported and the rest still run; the exit code is non-zero if any failed.
 set -uo pipefail
@@ -20,6 +21,9 @@ NVM_VERSION=v0.40.3
 # nvim-treesitter (main) README: 0.26.1 or later, from a package manager or the release, not npm
 TS_MIN_VERSION=0.26.1
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
+# fzf-lua's defaults pass --highlight-line (fzf 0.53+); apt's fzf is 0.29 on 22.04 and 0.44 on 24.04
+FZF_MIN_VERSION=0.53
+FZF_DIR="$HOME/.fzf"
 DRY_RUN="${DRY_RUN:-}"
 PYENV_ROOT="${PYENV_ROOT:-$HOME/.pyenv}"
 NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
@@ -231,21 +235,88 @@ step_treesitter() {
       fail "install tree-sitter into $BIN_DIR"
     fi
   else
-    fail "download or run $url (glibc too old? build it with cargo install --locked tree-sitter-cli)"
+    rm -rf "$tmp"
+    # The release binary needs a recent glibc (2.39 at 0.26), which Ubuntu 22.04 (2.35) lacks: build it instead
+    ts_cargo_install "$url"
+    return
   fi
   rm -rf "$tmp"
 }
 
-all_steps=(system pyenv python node treesitter)
+# Builds the CLI against this machine's glibc into cargo's bin and links it into BIN_DIR. Takes a few minutes.
+ts_cargo_install() {
+  local cargo
+  cargo="$(command -v cargo || true)"
+  [[ -z "$cargo" && -x "$HOME/.cargo/bin/cargo" ]] && cargo="$HOME/.cargo/bin/cargo"
+  [[ -n "$cargo" ]] || {
+    fail "the release binary does not run here ($1) and cargo is missing: install Rust with https://rustup.rs, then rerun this step"
+    return 1
+  }
+  warn "the release binary does not run here (glibc too old?); building tree-sitter-cli with cargo"
+  local root="${CARGO_HOME:-$HOME/.cargo}"
+  # apt's cargo can be older than the CLI's minimum Rust version; rustup's stays current
+  run "$cargo" install --locked --root "$root" tree-sitter-cli || {
+    fail "cargo install tree-sitter-cli (an old apt cargo? use rustup: https://rustup.rs)"
+    return 1
+  }
+  run mkdir -p "$BIN_DIR" && run ln -sfn "$root/bin/tree-sitter" "$BIN_DIR/tree-sitter" || {
+    fail "link $BIN_DIR/tree-sitter"
+    return 1
+  }
+  [[ -n "$DRY_RUN" ]] && return 0
+  printf '    %s -> %s\n' "$("$BIN_DIR/tree-sitter" --version)" "$BIN_DIR/tree-sitter"
+}
+
+step_fzf() {
+  log "fzf $FZF_MIN_VERSION+"
+  local v
+  v="$(have fzf && fzf --version 2>/dev/null | awk '{print $1}')"
+  if [[ -n "$v" ]] && version_ge "$v" "$FZF_MIN_VERSION"; then
+    skip "fzf $v ($(command -v fzf))"
+    return 0
+  fi
+  [[ -n "$v" ]] && warn "fzf $v at $(command -v fzf) is older than $FZF_MIN_VERSION (sudo apt remove fzf, if it is apt's)"
+  have git || {
+    fail "git is required for fzf (run the system step)"
+    return 1
+  }
+  if [[ -d "$FZF_DIR/.git" ]]; then
+    run git -C "$FZF_DIR" pull --ff-only --quiet || {
+      fail "git pull in $FZF_DIR"
+      return 1
+    }
+  else
+    run git clone --depth 1 --quiet https://github.com/junegunn/fzf.git "$FZF_DIR" || {
+      fail "git clone fzf"
+      return 1
+    }
+  fi
+  # --bin only fetches the binary into ~/.fzf/bin; the shell key bindings (--all) are rcfiles' business
+  run "$FZF_DIR/install" --bin || {
+    fail "$FZF_DIR/install --bin"
+    return 1
+  }
+  # Linked into BIN_DIR so nvim finds it whether or not the shell rc puts ~/.fzf/bin on PATH
+  run mkdir -p "$BIN_DIR" && run ln -sfn "$FZF_DIR/bin/fzf" "$BIN_DIR/fzf" || {
+    fail "link $BIN_DIR/fzf"
+    return 1
+  }
+  [[ -n "$DRY_RUN" ]] && return 0
+  printf '    fzf %s -> %s\n' "$("$BIN_DIR/fzf" --version | awk '{print $1}')" "$BIN_DIR/fzf"
+  [[ "$(command -v fzf)" == "$BIN_DIR/fzf" || "$(command -v fzf)" == "$FZF_DIR/bin/fzf" ]] ||
+    warn "put $BIN_DIR first in PATH (fzf on PATH: $(command -v fzf || echo none))"
+}
+
+all_steps=(system pyenv python node treesitter fzf)
 steps=("$@")
 [[ ${#steps[@]} -eq 0 ]] && steps=("${all_steps[@]}")
 for s in "${steps[@]}"; do
   case "$s" in
     -h | --help)
-      sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
-    system | pyenv | python | node | treesitter) ;;
+    system | pyenv | python | node | treesitter | fzf) ;;
     *)
       echo "Unknown step: $s (steps: ${all_steps[*]})" >&2
       exit 2
