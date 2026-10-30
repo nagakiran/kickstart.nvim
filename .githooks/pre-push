@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Refuse to push a lazy-lock.json that pins a plugin commit its remote does not have.
+# Install: git config core.hooksPath .githooks. Bypass: git push --no-verify
+#
+# A commit made inside ~/.local/share/nvim/lazy/<plugin> is written to the lockfile by lazy but
+# exists only on this machine, so every other machine fails with "upload-pack: not our ref".
+# Only lockfile entries changed by the pushed commits are checked. Each pinned commit is fetched
+# from the repo its spec names ('owner/name' in the pushed tree's Lua), which is the same request
+# lazy makes on a fresh machine. The lockfile records name, branch and commit, never the remote.
+
+set -uo pipefail
+
+zero=0000000000000000000000000000000000000000
+lock=lazy-lock.json
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+git init -q "$tmp/probe"
+failed=0
+seen=' '
+
+# "name commit" for every lockfile entry added or changed between two trees
+changed_pins() {
+  git diff "$1" "$2" -- "$lock" | sed -n 's/^+ *"\([^"]*\)": {.*"commit": "\([0-9a-f]*\)".*/\1 \2/p'
+}
+
+# owner/repo of every spec string 'owner/<name>' in the given commit
+spec_repos() {
+  git grep -h -o -E "['\"][A-Za-z0-9_.-]+/${2//./\\.}['\"]" "$1" -- '*.lua' | tr -d "'\"" | sort -u
+}
+
+check() {
+  local rev=$1 name=$2 sha=$3 repos repo out
+  repos=$(spec_repos "$rev" "$name")
+  if [[ -z "$repos" ]]; then
+    echo "pre-push: $name: no 'owner/$name' spec found (url= or dir= spec?), not checked" >&2
+    return
+  fi
+  repo=$(head -1 <<<"$repos")
+  [[ "$repos" == "$repo" ]] || echo "pre-push: $name: several specs ($(tr '\n' ' ' <<<"$repos")), checking $repo" >&2
+  if ! out=$(git -C "$tmp/probe" fetch -q --depth=1 --filter=blob:none "https://github.com/$repo.git" "$sha" 2>&1 </dev/null); then
+    echo "pre-push: $lock pins $name to $sha, which https://github.com/$repo does not have:" >&2
+    sed 's/^/    /' <<<"$out" >&2
+    failed=1
+  fi
+}
+
+while read -r _ lsha _ rsha; do
+  [[ "$lsha" == "$zero" ]] && continue # deleting a ref
+  if [[ "$rsha" != "$zero" ]] && git cat-file -e "$rsha^{commit}" 2>/dev/null; then
+    base=$rsha
+  else
+    # New branch, or a remote tip we have not fetched: start from the oldest commit no remote has
+    oldest=$(git rev-list --reverse "$lsha" --not --remotes | head -1)
+    [[ -z "$oldest" ]] && continue
+    base=$(git rev-parse -q --verify "$oldest^") || base=$(git hash-object -t tree /dev/null)
+  fi
+  while read -r name sha; do
+    [[ "$seen" == *" $name@$sha "* ]] && continue
+    seen+="$name@$sha "
+    check "$lsha" "$name" "$sha"
+  done < <(changed_pins "$base" "$lsha")
+done
+
+if [[ $failed -ne 0 ]]; then
+  echo "pre-push: push the plugin commit to that repo (or point the spec at a fork that has it), or pin an upstream commit" >&2
+  exit 1
+fi

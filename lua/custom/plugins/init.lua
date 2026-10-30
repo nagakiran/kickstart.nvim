@@ -98,11 +98,13 @@ return {
     end,
   },
   {
-    -- Had to do "yarn install" from ~/.local/share/nvim/lazy/markdown-preview.nvim/app
     'iamcco/markdown-preview.nvim',
     cmd = { 'MarkdownPreviewToggle', 'MarkdownPreview', 'MarkdownPreviewStop' },
     ft = { 'markdown' },
+    -- A lazy plugin is not on the runtimepath during a first-install build, so its autoload
+    -- function is unknown (E117) unless the plugin is loaded first
     build = function()
+      require('lazy').load { plugins = { 'markdown-preview.nvim' } }
       vim.fn['mkdp#util#install']()
     end,
   },

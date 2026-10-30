@@ -1,6 +1,9 @@
 return {
   {
-    'tpope/vim-fugitive',
+    -- Fork: upstream plus g:fugitive_summary_log_columns (set in init.lua). The fork's master is
+    -- an unrelated 2016 branch, so the patch lives on 'personal'; rebase it onto tpope's master to update.
+    'nagakiran/vim-fugitive',
+    branch = 'personal',
     config = function()
       -- Close all diff windows from any pane (fugitive's dq only exists on blob side panes,
       -- not on the working file where you actually edit during 3-way merge resolution)

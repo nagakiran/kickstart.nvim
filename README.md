@@ -115,7 +115,7 @@ Enable the pre-commit hook that auto-formats Lua files with `stylua` on every co
 git config core.hooksPath .githooks
 ```
 
-This is a one-time step per clone. The hook itself is tracked in `.githooks/pre-commit`.
+This is a one-time step per clone. The hook itself is tracked in `.githooks/pre-commit`. The same setting enables `.githooks/pre-push`, which refuses a push whose `lazy-lock.json` pins a plugin commit that the plugin's repo (as named in its spec) does not have, such as a commit made inside `~/.local/share/nvim/lazy/<plugin>` and never pushed.
 
 Start Neovim
 
