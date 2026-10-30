@@ -68,6 +68,12 @@ return {
       })
     end,
     config = function()
+      -- The main branch compiles every parser with the tree-sitter CLI. Without it each
+      -- missing parser fails to build on every launch, so skip installing until it is
+      -- present (scripts/install-deps.sh installs it); parsers already built still work.
+      if vim.fn.executable 'tree-sitter' == 0 then
+        return
+      end
       require('nvim-treesitter').install(ensure_installed)
     end,
   },
