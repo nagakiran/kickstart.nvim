@@ -49,6 +49,28 @@ return {
   },
   {
     'wakatime/vim-wakatime',
+    -- Only on machines with a usable API key: without one the plugin prompts or
+    -- reports "Invalid API Key" (wakatime-cli exit 104) on every launch.
+    cond = function()
+      local env_key = vim.env.WAKATIME_API_KEY or ''
+      local cfg = vim.fn.expand(vim.env.WAKATIME_HOME or '~') .. '/.wakatime.cfg'
+      local lines = vim.fn.filereadable(cfg) == 1 and vim.fn.readfile(cfg) or {}
+      local cfg_key, vault_cmd = '', ''
+      for _, line in ipairs(lines) do
+        cfg_key = line:match '^%s*api_?key%s*=%s*(%S+)' or cfg_key
+        vault_cmd = line:match '^%s*api_key_vault_cmd%s*=%s*(%S.*)' or vault_cmd
+      end
+      local function valid(key)
+        local hex = '%x%x%x%x'
+        return key:lower():gsub('^waka_', ''):match('^' .. hex .. hex .. '%-' .. hex .. '%-' .. hex .. '%-' .. hex .. '%-' .. hex .. hex .. hex .. '$') ~= nil
+      end
+      return valid(env_key) or valid(cfg_key) or vault_cmd ~= ''
+    end,
+    config = function()
+      -- lualine already shows per-project time via custom.wakatime; the plugin's
+      -- own "today" component would run `wakatime-cli --today` a second time.
+      require('wakatime').setup { status_bar_enabled = false }
+    end,
   },
   {
     'jbyuki/venn.nvim',
