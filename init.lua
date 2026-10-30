@@ -454,8 +454,17 @@ require('lazy').setup({
         -- via pyenv shims which fall back to the "system" python version
         -- (no isort/black there) and burn ~1.3s each scanning all pyenv
         -- versions before failing, adding 2.6s+ to every python save.
-        isort = { command = '/Users/nagakiran/.pyenv/versions/myenv/bin/isort' },
-        black = { command = '/Users/nagakiran/.pyenv/versions/myenv/bin/black' },
+        -- Elsewhere (no such venv) they come from PATH.
+        isort = {
+          command = (function(p)
+            return vim.fn.executable(p) == 1 and p or 'isort'
+          end)(vim.fn.expand '~/.pyenv/versions/myenv/bin/isort'),
+        },
+        black = {
+          command = (function(p)
+            return vim.fn.executable(p) == 1 and p or 'black'
+          end)(vim.fn.expand '~/.pyenv/versions/myenv/bin/black'),
+        },
       },
       formatters_by_ft = {
         lua = { 'stylua' },
