@@ -13,6 +13,13 @@
 #   BIN_DIR (default ~/.local/bin, where the Linux tree-sitter binary and the fzf link go)
 #
 # Every step is idempotent. A failing step is reported and the rest still run; the exit code is non-zero if any failed.
+
+# Sourcing would run `set -u` and the final `exit` in the calling shell, closing the terminal (or tmux window)
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  echo "Run this script, do not source it: bash ${BASH_SOURCE[0]}" >&2
+  return 1
+fi
+
 set -uo pipefail
 
 PYTHON_VERSION="${PYTHON_VERSION:-3.13.2}"
