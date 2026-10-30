@@ -7,7 +7,9 @@
 #   pyenv    pyenv itself
 #   python   pyenv Python $PYTHON_VERSION and the 'myenv' venv with pynvim (python3_host_prog, pyright's venv)
 #   node     nvm and Node $NODE_MAJOR (copilot.lua needs 22+; Mason's npm-based servers need node on PATH)
-# Environment: DRY_RUN=1 prints what would change; PYTHON_VERSION (default 3.13.2); NODE_MAJOR (default 22)
+#   treesitter  the tree-sitter CLI $TS_MIN_VERSION+, which nvim-treesitter's main branch compiles parsers with
+# Environment: DRY_RUN=1 prints what would change; PYTHON_VERSION (default 3.13.2); NODE_MAJOR (default 22);
+#   BIN_DIR (default ~/.local/bin, where the Linux tree-sitter binary goes)
 #
 # Every step is idempotent. A failing step is reported and the rest still run; the exit code is non-zero if any failed.
 set -uo pipefail
@@ -15,6 +17,9 @@ set -uo pipefail
 PYTHON_VERSION="${PYTHON_VERSION:-3.13.2}"
 NODE_MAJOR="${NODE_MAJOR:-22}"
 NVM_VERSION=v0.40.3
+# nvim-treesitter (main) README: 0.26.1 or later, from a package manager or the release, not npm
+TS_MIN_VERSION=0.26.1
+BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 DRY_RUN="${DRY_RUN:-}"
 PYENV_ROOT="${PYENV_ROOT:-$HOME/.pyenv}"
 NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
@@ -180,16 +185,67 @@ step_node() {
   ) || fail "nvm install $NODE_MAJOR"
 }
 
-all_steps=(system pyenv python node)
+# Version of the tree-sitter on PATH, or nothing
+ts_version() {
+  have tree-sitter && tree-sitter --version 2>/dev/null | awk '{print $2}'
+}
+version_ge() { [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" == "$2" ]]; }
+
+step_treesitter() {
+  log "tree-sitter CLI $TS_MIN_VERSION+"
+  local v
+  v="$(ts_version)"
+  if [[ -n "$v" ]] && version_ge "$v" "$TS_MIN_VERSION"; then
+    skip "tree-sitter $v ($(command -v tree-sitter))"
+    return 0
+  fi
+  [[ -n "$v" ]] && warn "tree-sitter $v at $(command -v tree-sitter) is older than $TS_MIN_VERSION"
+  if [[ "$os" == mac ]]; then
+    brew_install tree-sitter-cli
+    return
+  fi
+  # apt's tree-sitter-cli is missing or too old on current Ubuntu/Debian, so use the release binary
+  local platform
+  case "$(uname -s)/$(uname -m)" in
+    Linux/x86_64 | Linux/amd64) platform=linux-x64 ;;
+    Linux/aarch64 | Linux/arm64) platform=linux-arm64 ;;
+    Linux/armv7l | Linux/armv6l) platform=linux-arm ;;
+    *)
+      fail "no tree-sitter release for $(uname -s)/$(uname -m): https://github.com/tree-sitter/tree-sitter/releases"
+      return 1
+      ;;
+  esac
+  local url="https://github.com/tree-sitter/tree-sitter/releases/latest/download/tree-sitter-$platform.gz"
+  if [[ -n "$DRY_RUN" ]]; then
+    run curl -fL "$url" "| gunzip > $BIN_DIR/tree-sitter"
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp -d)"
+  # Runs it before replacing anything, so a binary this machine's glibc cannot load leaves the old one in place
+  if curl -fsSL "$url" | gunzip >"$tmp/tree-sitter" && chmod +x "$tmp/tree-sitter" && "$tmp/tree-sitter" --version >/dev/null 2>&1; then
+    if mkdir -p "$BIN_DIR" && mv "$tmp/tree-sitter" "$BIN_DIR/tree-sitter"; then
+      printf '    %s -> %s\n' "$("$BIN_DIR/tree-sitter" --version)" "$BIN_DIR/tree-sitter"
+      [[ "$(command -v tree-sitter)" == "$BIN_DIR/tree-sitter" ]] || warn "put $BIN_DIR first in PATH (tree-sitter on PATH: $(command -v tree-sitter || echo none))"
+    else
+      fail "install tree-sitter into $BIN_DIR"
+    fi
+  else
+    fail "download or run $url (glibc too old? build it with cargo install --locked tree-sitter-cli)"
+  fi
+  rm -rf "$tmp"
+}
+
+all_steps=(system pyenv python node treesitter)
 steps=("$@")
 [[ ${#steps[@]} -eq 0 ]] && steps=("${all_steps[@]}")
 for s in "${steps[@]}"; do
   case "$s" in
     -h | --help)
-      sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
-    system | pyenv | python | node) ;;
+    system | pyenv | python | node | treesitter) ;;
     *)
       echo "Unknown step: $s (steps: ${all_steps[*]})" >&2
       exit 2
