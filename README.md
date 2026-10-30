@@ -202,11 +202,15 @@ sudo apt install make gcc ripgrep unzip git xclip neovim
 #### Linux Install
 <details><summary>Ubuntu Install Steps</summary>
 
+apt's `neovim` is usually too old for this config. Install the dependencies from apt and Neovim from its GitHub release with `scripts/install-nvim.sh`, which picks the x86_64 or arm64 build, unpacks it under `~/.local/opt` and links `~/.local/bin/nvim` (rerun it to update; `--version vX.Y.Z` or `nightly` for another release):
+
 ```
-sudo add-apt-repository ppa:neovim-ppa/unstable -y
 sudo apt update
-sudo apt install make gcc ripgrep unzip git xclip neovim
+sudo apt install make gcc ripgrep unzip git xclip curl
+~/.config/nvim/scripts/install-nvim.sh
 ```
+
+Make sure `~/.local/bin` comes first in `PATH` (the script warns otherwise). On macOS the same script uses Homebrew (`--tarball` for the release build instead).
 </details>
 <details><summary>Debian Install Steps</summary>
 
