@@ -626,6 +626,9 @@ vim.cmd [[
   " autocmd BufRead,BufNewFile ~/textfiles/journals/*.txt set filetype=markdown.jrnl.txtfmt
   au BufNewFile,BufRead *.tjp,*.tji               setf tjp
   ]]
+-- Treat MDX as plain markdown (Neovim's default is a separate 'mdx' filetype that
+-- markdown plugins like render-markdown and markdown LSP/formatters don't attach to)
+vim.filetype.add { extension = { mdx = 'markdown' } }
 -- Relative path not working and need to be checked
 vim.cmd 'source ~/.config/nvim/vim_fns.vim'
 
