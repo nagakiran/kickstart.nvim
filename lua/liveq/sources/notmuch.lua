@@ -29,6 +29,19 @@ return function(opts)
     table.insert(env, 'LIVEQ_MAIL_URL=' .. opts.url)
   end
 
+  local web
+  if opts.url then
+    -- the web client's link (e.g. Gmail), since ctrl-o opens the local HTML page
+    web = {
+      desc = 'web',
+      fn = function(items, source)
+        for _, item in ipairs(items) do
+          require('liveq.show').open(source, item.id)
+        end
+      end,
+    }
+  end
+
   local spec = {
     title = opts.title or 'Mail',
     prompt = opts.prompt or 'mail> ',
@@ -55,6 +68,19 @@ return function(opts)
     syntax = syntax,
 
     actions = {
+      -- like neomutt's <F7> (viewhtmlmsg): the thread rendered as a local HTML page, inline images included
+      ['ctrl-o'] = {
+        desc = 'browser',
+        fn = function(items, source)
+          for _, item in ipairs(items) do
+            local path = require('liveq.util').run(source, { 'html', '--', item.id })
+            if path and vim.trim(path) ~= '' then
+              vim.ui.open(vim.trim(path))
+            end
+          end
+        end,
+      },
+      ['alt-o'] = web,
       ['ctrl-x'] = {
         desc = 'tag',
         fn = function(items, source)

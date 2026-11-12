@@ -4,6 +4,7 @@
 --   nvim -l notmuch.lua show [--plain] -- thread:ID
 --   nvim -l notmuch.lua complete -f json [-c CURSOR] -- QUERY
 --   nvim -l notmuch.lua url -- thread:ID                     a link to the thread, from the $LIVEQ_MAIL_URL template
+--   nvim -l notmuch.lua html -- thread:ID                    writes the thread as an HTML page in $TMPDIR; prints its path
 --   nvim -l notmuch.lua saved -f tsv                         notmuch's named queries (query.NAME in its config)
 --   nvim -l notmuch.lua save [--label NAME] -- QUERY         adds a named query; usable as `query:NAME` anywhere
 --   nvim -l notmuch.lua tag -- '+a -b' thread:ID...          changes the tags of threads
@@ -251,6 +252,177 @@ local function show(opts, rest)
   end
 end
 
+-- -- html ---------------------------------------------------------------------------------------------------------
+
+local function escape_html(s)
+  return (s or ''):gsub('&', '&amp;'):gsub('<', '&lt;'):gsub('>', '&gt;'):gsub('"', '&quot;')
+end
+
+--- The part of an HTML document that goes inside another page's body: its <style> blocks and the inside of its <body>.
+local function html_fragment(html)
+  local styles = {}
+  for style in html:gmatch '<[Ss][Tt][Yy][Ll][Ee].-</[Ss][Tt][Yy][Ll][Ee]>' do
+    table.insert(styles, style)
+  end
+  local body = html:match '<[Bb][Oo][Dd][Yy][^>]*>(.*)</[Bb][Oo][Dd][Yy]>' or html:match '<[Bb][Oo][Dd][Yy][^>]*>(.*)$'
+  if not body then
+    body = html:gsub('<[Hh][Ee][Aa][Dd].-</[Hh][Ee][Aa][Dd]>', ''):gsub('</?[Hh][Tt][Mm][Ll][^>]*>', ''):gsub('<!%a[^>]*>', '')
+    styles = {} -- they are still in the body
+  end
+  return table.concat(styles, '\n') .. body
+end
+
+--- Writes the bytes of a leaf part of a message to `path`; false when notmuch fails.
+local function save_part(message_id, part_id, path)
+  local ok, job = pcall(vim.system, { os.getenv 'LIVEQ_NOTMUCH' or 'notmuch', 'show', '--format=raw', '--part=' .. part_id, 'id:' .. message_id })
+  if not ok then
+    return false
+  end
+  local result = job:wait(30000)
+  local file = result.code == 0 and io.open(path, 'wb')
+  if not file then
+    return false
+  end
+  file:write(result.stdout or '')
+  file:close()
+  return true
+end
+
+--- The body of a message as HTML: its HTML parts (the HTML alternative when there is one), its other text parts as
+--- preformatted text; inline images (`cid:` links) are saved into `dir` and linked from there.
+local function message_html(message, dir)
+  local bodies, attachments, cids = {}, {}, {}
+  local function walk(part)
+    if type(part) ~= 'table' then
+      return
+    end
+    local ctype = (part['content-type'] or ''):lower()
+    if part['content-id'] then
+      cids[part['content-id']:gsub('^<', ''):gsub('>$', '')] = part
+    end
+    if type(part.content) == 'table' then
+      if ctype == 'multipart/alternative' then
+        -- the richest alternative: an HTML one if any, else the last
+        local chosen
+        for _, child in ipairs(part.content) do
+          local cct = (child['content-type'] or ''):lower()
+          if cct == 'text/html' or (cct:match '^multipart/' and vim.inspect(child):find('text/html', 1, true)) then
+            chosen = child
+          end
+        end
+        walk(chosen or part.content[#part.content])
+      else
+        for _, child in ipairs(part.content) do
+          walk(child)
+        end
+      end
+    elseif ctype == 'text/html' and type(part.content) == 'string' and not part.filename then
+      table.insert(bodies, html_fragment(part.content))
+    elseif ctype == 'text/plain' and type(part.content) == 'string' and not part.filename then
+      table.insert(bodies, '<pre class="plain">' .. escape_html(part.content) .. '</pre>')
+    elseif part.filename and not part['content-id'] then
+      table.insert(attachments, ('%s (%s)'):format(part.filename, ctype))
+    end
+  end
+  for _, part in ipairs(message.body or {}) do
+    walk(part)
+  end
+  local html = table.concat(bodies, '\n<hr class="part">\n')
+  -- the inline images that the HTML refers to, saved next to the page
+  html = html:gsub('([Cc][Ii][Dd]:)([^"\'%s>)]+)', function(prefix, cid)
+    local part = cids[vim.uri_decode(cid)]
+    if not part then
+      return prefix .. cid
+    end
+    local name = ('%s-%s'):format(message.id:gsub('[^%w]', '_'):sub(1, 40), part.id)
+    local ext = (part.filename or ''):match '(%.%w+)$' or ('.' .. ((part['content-type'] or ''):match '/(%w+)' or 'bin'))
+    local path = vim.fs.joinpath(dir, name .. ext)
+    if vim.uv.fs_stat(path) or save_part(message.id, part.id, path) then
+      return vim.uri_from_fname(path)
+    end
+    return prefix .. cid
+  end)
+  return html, attachments
+end
+
+local PAGE_STYLE = [[
+body { font-family: -apple-system, system-ui, sans-serif; margin: 0 auto; max-width: 1100px; padding: 16px; }
+.message { border: 1px solid #ccc; border-radius: 6px; margin: 0 0 24px; padding: 0 16px 16px; overflow-x: auto; }
+.headers { background: #f4f4f4; margin: 0 -16px 16px; padding: 10px 16px; font-size: 13px; border-bottom: 1px solid #ddd; }
+.headers th { text-align: right; color: #666; font-weight: normal; padding-right: 8px; vertical-align: top; white-space: nowrap; }
+pre.plain { white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+hr.part { border: 0; border-top: 1px dashed #ccc; }
+]]
+
+--- Writes the thread as an HTML page into a new temporary directory and prints the page's path.
+local function html(_, rest)
+  local id = rest[1]
+  if not is_thread(id) then
+    fail('not a thread id: ' .. tostring(id))
+  end
+  local thread, err = json { 'show', '--format=json', '--entire-thread=true', '--include-html', id }
+  if not thread then
+    fail(err)
+  end
+  local messages = {}
+  local function collect(node)
+    if type(node) ~= 'table' then
+      return
+    end
+    if node.id and node.headers then
+      table.insert(messages, node)
+      return
+    end
+    for _, child in ipairs(node) do
+      collect(child)
+    end
+  end
+  collect(thread)
+  if #messages == 0 then
+    fail('no message in ' .. id)
+  end
+
+  -- not vim.fn.tempname(): that directory is deleted when this `nvim -l` exits, before the browser reads the page
+  local tmp = (os.getenv 'TMPDIR' or '/tmp'):gsub('/$', '')
+  local dir = vim.uv.fs_mkdtemp(tmp .. '/liveq-mail-XXXXXX')
+  if not dir then
+    fail('cannot create a directory in ' .. tmp)
+  end
+
+  local subject = (messages[1].headers or {}).Subject or ''
+  local page = {
+    '<!doctype html><html><head><meta charset="utf-8">',
+    '<title>' .. escape_html(subject) .. '</title>',
+    '<style>' .. PAGE_STYLE .. '</style></head><body>',
+  }
+  for _, m in ipairs(messages) do
+    local h = m.headers or {}
+    local body, attachments = message_html(m, dir)
+    table.insert(page, '<div class="message"><table class="headers">')
+    for _, header in ipairs { 'From', 'To', 'Cc', 'Date', 'Subject' } do
+      if h[header] and h[header] ~= '' then
+        table.insert(page, ('<tr><th>%s</th><td>%s</td></tr>'):format(header, escape_html(h[header])))
+      end
+    end
+    if #attachments > 0 then
+      table.insert(page, ('<tr><th>Attachments</th><td>%s</td></tr>'):format(escape_html(table.concat(attachments, ', '))))
+    end
+    table.insert(page, '</table>')
+    table.insert(page, body ~= '' and body or '<p><i>(no text part)</i></p>')
+    table.insert(page, '</div>')
+  end
+  table.insert(page, '</body></html>')
+
+  local path = vim.fs.joinpath(dir, 'index.html')
+  local file = io.open(path, 'w')
+  if not file then
+    fail('cannot write ' .. path)
+  end
+  file:write(table.concat(page, '\n'))
+  file:close()
+  out(path)
+end
+
 -- -- complete -----------------------------------------------------------------------------------------------------
 
 local function candidate(display, insert, kind, detail)
@@ -475,7 +647,7 @@ local function tag(_, rest)
   end
 end
 
-local commands = { search = search, show = show, complete = complete, url = url, saved = saved, save = save, tag = tag }
+local commands = { search = search, show = show, html = html, complete = complete, url = url, saved = saved, save = save, tag = tag }
 local command = _G.arg[1]
 if not commands[command] then
   fail('unknown command: ' .. tostring(command) .. ' (expected: ' .. table.concat(vim.tbl_keys(commands), ', ') .. ')', 2)
