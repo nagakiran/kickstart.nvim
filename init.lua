@@ -283,6 +283,32 @@ require 'bufreap'
 require 'nocut'
 require 'leakguard'
 require 'vim'
+-- liveq: live query search (Jira via jiratui-jql: :JiraSearch, :JiraJql, <leader>j*; generic :Liveq {source})
+require('liveq').setup {
+  sources = {
+    jira = require 'liveq.sources.jira',
+    mail = require 'liveq.sources.notmuch' {
+      title = 'Mail (HPE)',
+      config = '~/rcfiles/.notmuch-hpe',
+      primary = true,
+      commands = { search = 'MailSearch', saved = 'MailSaved', query = 'MailQuery', show = 'MailShow' },
+      keymaps = { search = '<leader>ms', saved = '<leader>mr', query = '<leader>mq', show = '<leader>mi' },
+    },
+    gmail = require 'liveq.sources.notmuch' {
+      title = 'Mail (Gmail)',
+      prompt = 'gmail> ',
+      config = '~/.notmuch-config',
+      url = 'https://mail.google.com/mail/u/0/#search/rfc822msgid%3A%s',
+      commands = { search = 'GmailSearch', saved = 'GmailSaved', query = 'GmailQuery', show = 'GmailShow' },
+    },
+    mr = require 'liveq.sources.gitlab' {
+      project = 'sd/security_director',
+      repo = '~/stormbreaker/security_director',
+      commands = { search = 'MrSearch', saved = 'MrSaved', query = 'MrQuery', show = 'MrShow' },
+      keymaps = { search = '<leader>Ms', saved = '<leader>Mr', query = '<leader>Mq', show = '<leader>Mi', open = '<leader>Mo' },
+    },
+  },
+}
 
 -- [[ Configure and install plugins ]]
 --

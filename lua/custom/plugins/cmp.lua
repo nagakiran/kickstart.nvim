@@ -79,6 +79,11 @@ return {
           },
         },
       }
+
+      -- liveq: query completion (e.g. JQL fields, operators and values from Jira in `*.jql` buffers)
+      pcall(function()
+        require('liveq').setup_cmp(cmp)
+      end)
     end,
   },
 }

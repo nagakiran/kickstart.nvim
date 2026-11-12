@@ -1,0 +1,73 @@
+# liveq
+
+Live, query-driven search of anything that has a query language: you type a query, the results reload as you edit it, and completion helps you write it. The frontend is generic; each source is a backend command that implements a small CLI contract.
+
+- **Neovim** (this directory): fzf-lua live picker, nvim-cmp completion in a query buffer, details float.
+- **Shell** (`~/rcfiles/.zsh/liveq.zsh`): `lq <source> [query]` with fzf (`jqls` = `lq jira`, `mls` = `lq mail`), and TAB completion of the query on the command line for sources with their own picker.
+
+It lives inside the Neovim config for now; everything it needs is under `lua/liveq/`, so it can move to a plugin repo as-is.
+
+## Setup
+
+```lua
+require('liveq').setup { sources = { jira = require 'liveq.sources.jira' } }
+-- in the nvim-cmp config
+require('liveq').setup_cmp(cmp)
+```
+
+Commands: `:Liveq {source} [query]`, `:LiveqSaved {source}`, `:LiveqQuery {source} [query]`, `:LiveqShow {source} [id]`; a source may define its own names and keymaps (Jira: `:JiraSearch`, `:JiraSaved`, `:JiraJql`, `:JiraShow`, `<leader>js/jr/jq/ji/jo`).
+
+Keys in the picker: `tab` complete the query · `ctrl-space` select · `enter` insert the id(s) at the cursor · `alt-enter` insert "id - title" · `ctrl-o` browser · `ctrl-y` yank "id - title" · `ctrl-v` details float · `ctrl-e` edit the query in a buffer with completion · `ctrl-r`/`ctrl-s` saved queries · `ctrl-q` all results into a Markdown buffer; plus the source's own actions.
+
+## Backend contract
+
+A backend is any executable. Required subcommands:
+
+| Subcommand | Output |
+|---|---|
+| `search -f fzf -l LIMIT -- QUERY` | One line per item: `id \t display \t url \t title`. `display` may use ANSI colours. Hints, notes and errors are lines with an empty `id` (e.g. `\t\x1b[31mInvalid query\x1b[0m\t`). Exit 0 even for an invalid query, so that fzf shows the message. |
+| `show [--plain] -- ID` | The item as text for the preview window (ANSI allowed); with `--plain`, Markdown for the float. Prints nothing for an argument that is not an id (fzf may pass a hint line). |
+| `complete -f json [-c CURSOR] -- QUERY` | `{"context": "field\|operator\|value\|keyword\|...", "replace_start": N, "replace_end": N, "candidates": [{"display", "insert", "cursor_offset", "kind", "detail"}]}`. Offsets are in characters; `cursor_offset` is where the cursor goes within `insert`. `context = "value"` means the candidates depend on what is typed, so they are asked for again as the user types. |
+
+Optional subcommands (declared by the source, see below):
+
+| Subcommand | Used for |
+|---|---|
+| `url -- ID` | Opening the item under the cursor in the browser (`gx` in the float, `open` keymap). |
+| `saved -f tsv` / `save [--label L] -- QUERY` | Saved queries: `label \t query \t key \t origin` lines; `save` prompts for the label when it is not given. |
+| `pick [--shell] [-c CURSOR] -- TEXT` | A picker of the backend's own (e.g. one that reloads values from the server as you type). Without it, liveq's generic picker (`cli.lua`) is used, which only needs `complete`. |
+| `edit -- QUERY` | Editing the query in `$EDITOR` from the shell, e.g. one clause per line. Without it, the query is edited as a single line. |
+| `validate -- QUERY` | `<localleader>v` in the query buffer. |
+
+## Source spec (Lua)
+
+```lua
+{
+  title = 'Jira (JQL)', prompt = 'jql> ', item_name = 'work item key',
+  cmd = function() return { 'jiratui-jql' } end,  -- or a list, or a string
+  limit = 100,
+  pick = true, saved = true, validate = true, url = true,  -- optional subcommands it implements
+  id_pattern = '^%a[%w_]*%-%d+$',          -- what a real id looks like (filters hint/error lines)
+  cursor_id_pattern = '%u[%u%d]+%-%d+',    -- how to find an id under the cursor in any buffer
+  filetype = 'jql', extension = 'jql',     -- the query buffer, and the files that get completion
+  trigger_characters = { ' ', '(' }, keyword_pattern = [[\k\+]],
+  split_clauses = function(query) return query end,  -- how the query buffer lays out a query
+  syntax = function() vim.cmd [[ ... ]] end,
+  actions = { ['ctrl-t'] = { desc = 'tui', fn = function(items) end } },  -- items: { id, url, title }
+  commands = { search = 'JiraSearch', saved = 'JiraSaved', query = 'JiraJql', show = 'JiraShow' },
+  keymaps = { search = '<leader>js', saved = '<leader>jr', query = '<leader>jq', show = '<leader>ji', open = '<leader>jo' },
+}
+```
+
+In the shell, a source is registered in `liveq.zsh` with `lq_register NAME CMD 'pick edit saved url' EXTENSION`.
+
+## Sources
+
+| Source | Backend |
+|---|---|
+| `jira` | `jiratui-jql` from the jiratui repo (Python; shares the TUI's auth, JQL parser and saved queries). |
+| `mail`, `gmail` | `backends/notmuch.lua`, run with `nvim -l` (no Python, ~40ms start). One source per mailbox, picked with `NOTMUCH_CONFIG` (`mail` = HPE, the primary one; `gmail`). Items are threads. Completes query prefixes, tags, senders/recipients (prefix match, recent ones first), folders, dates and saved query names. Saved queries are notmuch's named queries (`query.NAME`, usable as `query:NAME` anywhere). Extra action: `ctrl-x` changes tags. `gmail` links to Gmail through the message id; `mail` has no web link. |
+
+| `mr` | `backends/gitlab.lua`, run with `nvim -l`, talking to GitLab through `glab api` (glab's login and host). Items are merge requests, `project!iid`. Default project `sd/security_director`; `project:all` searches every project (the MRs you authored or review unless you filter by people or words). Query terms mirror GitLab's search bar: `state:` `author:@me` `assignee:` `reviewer:` `label:`/`-label:` `milestone:` `project:` `branch:` `target:` `draft:` `created:7d` `updated:2w` `sort:`; other words search titles and descriptions. Completes users (project members), labels, milestones, branches and projects. Saved queries live in `~/.config/liveq/gitlab-saved.tsv`. Extra actions: `ctrl-g` checkout in the local clone, `ctrl-d` diff. |
+
+`sources/notmuch.lua` is a factory: `require('liveq.sources.notmuch') { title, prompt, config, url, primary, commands, keymaps }`. In the shell, `mls` is `lq mail`. `sources/gitlab.lua` is a factory too: `{ project, repo, host, commands, keymaps }`; `mrs` is `lq mr`.
