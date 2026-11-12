@@ -1,7 +1,7 @@
 -- The notmuch backend of liveq, run with `nvim -l` (no plugins, no user config):
 --
 --   nvim -l notmuch.lua search -f fzf -l LIMIT -- QUERY
---   nvim -l notmuch.lua show [--plain] -- thread:ID
+--   nvim -l notmuch.lua show [--plain] [--fold] -- thread:ID
 --   nvim -l notmuch.lua complete -f json [-c CURSOR] -- QUERY
 --   nvim -l notmuch.lua url -- thread:ID                     a link to the thread, from the $LIVEQ_MAIL_URL template
 --   nvim -l notmuch.lua html -- thread:ID                    writes the thread as an HTML page in $TMPDIR; prints its path
@@ -76,8 +76,8 @@ local function parse(args)
     if a == '--' then
       vim.list_extend(rest, vim.list_slice(args, i + 1))
       break
-    elseif a == '--plain' then
-      opts.plain = true
+    elseif a == '--plain' or a == '--fold' then
+      opts[a:sub(3)] = true
       i = i + 1
     elseif a:match '^%-' and args[i + 1] then
       opts[a:gsub('^%-+', '')] = args[i + 1]
@@ -105,9 +105,45 @@ end
 
 -- -- search -------------------------------------------------------------------------------------------------------
 
+-- the prefixes whose terms are words, so that `prefix:word*` matches the words that start with `word`
+local WILDCARD_PREFIXES = { from = true, to = true, subject = true, body = true, attachment = true }
+local OPERATORS = { ['and'] = true, ['or'] = true, ['not'] = true }
+
+--- The query as it is being typed: notmuch matches whole words only, so the last word, while it is still being typed
+--- (no space after it), also matches as a prefix: `device configu` searches `device (configu or configu*)`. The word
+--- itself stays, so that its stemmed forms still match too. Words under 3 characters and terms that are not plain
+--- words (tags, dates, addresses, quoted phrases) are left alone.
+local function live_query(query)
+  if query:match '%s$' then
+    return query
+  end
+  local before, word = query:match '^(.-)(%S+)$'
+  if not word then
+    return query
+  end
+  local open, rest = word:match '^([%(%-]*)(.*)$' -- `(word` or `-word`
+  local prefix, term = rest:match '^(%a+):(.*)$'
+  if prefix then
+    if not WILDCARD_PREFIXES[prefix:lower()] then
+      return query
+    end
+    prefix = prefix .. ':'
+  else
+    prefix, term = '', rest
+  end
+  if #term < 3 or not term:match '^%w+$' or OPERATORS[term:lower()] then
+    return query
+  end
+  return ('%s%s(%s%s or %s%s*)'):format(before, open, prefix, term, prefix, term)
+end
+
 local function search(opts, rest)
   local query = vim.trim(table.concat(rest, ' '))
   local fzf = opts.f == 'fzf' or opts.format == 'fzf'
+  if fzf then
+    -- fzf passes the prompt without its trailing space; the picker's {q} keeps it in the raw arguments
+    query = live_query(table.concat(rest, ' '):gsub('^%s+', ''))
+  end
   if query == '' then
     if fzf then
       out '\t\27[2mType a notmuch query, e.g. from:bank tag:attachment date:1M..   tab: complete\27[0m\t\t'
@@ -156,8 +192,43 @@ end
 
 local ENTITIES = { nbsp = ' ', amp = '&', lt = '<', gt = '>', quot = '"', apos = "'", ['#39'] = "'" }
 
---- The text of an HTML part, without its markup.
-local function html_to_text(html)
+local W3M = vim.fn.executable 'w3m' == 1
+
+--- The width to lay text out in: fzf's preview window, else a fixed one (the float is at most 110 wide).
+--- The width to lay text out in: $LIVEQ_WIDTH when the frontend gives one (the text width of the buffer or float that
+--- shows it), else fzf's preview window, else 100.
+local function text_width()
+  local given = tonumber(os.getenv 'LIVEQ_WIDTH' or '')
+  if given then
+    return math.max(40, given)
+  end
+  local columns = tonumber(os.getenv 'FZF_PREVIEW_COLUMNS' or '')
+  return math.max(40, math.min(columns or 100, 160) - 2)
+end
+
+--- Starts w3m on an HTML part (it lays out tables, lists and paragraphs as a browser would); nil when it cannot.
+local function w3m_start(html)
+  -- notmuch has already decoded the part to UTF-8, so a charset the HTML declares would be wrong now
+  html = html:gsub('<[Mm][Ee][Tt][Aa][^>]-[Cc][Hh][Aa][Rr][Ss][Ee][Tt][^>]*>', '')
+  local ok, job = pcall(
+    vim.system,
+    { 'w3m', '-T', 'text/html', '-dump', '-cols', tostring(text_width()), '-I', 'UTF-8', '-O', 'UTF-8' },
+    { stdin = html, text = true }
+  )
+  return ok and job or nil
+end
+
+--- The text w3m rendered; nil when it failed.
+local function w3m_finish(job)
+  local result = job:wait(5000)
+  if result.code ~= 0 or not result.stdout then
+    return nil
+  end
+  return vim.trim((result.stdout:gsub('[ \t]+\n', '\n'):gsub('\n\n\n+', '\n\n')))
+end
+
+--- The text of an HTML part with its markup stripped, when w3m is not there.
+local function crude_html_to_text(html)
   local text = html:gsub('<[Ss][Tt][Yy][Ll][Ee].-</[Ss][Tt][Yy][Ll][Ee]>', ''):gsub('<[Ss][Cc][Rr][Ii][Pp][Tt].-</[Ss][Cc][Rr][Ii][Pp][Tt]>', '')
   text = text:gsub('<!%-%-.-%-%->', '')
   text = text:gsub('<[Bb][Rr]%s*/?>', '\n'):gsub('</[Pp]>', '\n\n'):gsub('</[Tt][Rr]>', '\n'):gsub('</[Dd][Ii][Vv]>', '\n'):gsub('</[Hh]%d>', '\n\n')
@@ -173,9 +244,31 @@ local function html_to_text(html)
   return vim.trim(text)
 end
 
---- The text of a message: its text/plain parts, or its text/html ones without the markup; and its attachments.
+-- w3m runs on every HTML part of a thread at once, up to this many processes; the rest run one by one when read
+local MAX_W3M_JOBS = 32
+local w3m_jobs = 0
+
+--- The text of an HTML part, as a function that returns it: w3m starts now, so that the parts of a thread render in
+--- parallel, and the function waits for it. Without w3m (or when it fails), the crude conversion.
+local function html_to_text(html)
+  local job
+  if W3M and w3m_jobs < MAX_W3M_JOBS then
+    job = w3m_start(html)
+    w3m_jobs = w3m_jobs + 1
+  end
+  return function()
+    if W3M and not job then
+      job = w3m_start(html)
+    end
+    return (job and w3m_finish(job)) or crude_html_to_text(html)
+  end
+end
+
+--- The text of a message (as a function that returns it, see html_to_text) and its attachments. With w3m, the HTML
+--- alternative rendered (it keeps the layout that the plain one of e.g. Outlook loses, which double-spaces every
+--- line); without it, the text/plain parts when there are any, else the HTML ones stripped of markup.
 local function message_text(message)
-  local texts, htmls, attachments = {}, {}, {}
+  local texts, htmls, html_parts, attachments = {}, {}, {}, {}
   local function walk(part)
     if type(part) ~= 'table' then
       return
@@ -186,7 +279,7 @@ local function message_text(message)
     elseif ctype == 'text/plain' and type(part.content) == 'string' then
       table.insert(texts, part.content)
     elseif ctype == 'text/html' and type(part.content) == 'string' then
-      table.insert(htmls, html_to_text(part.content))
+      table.insert(html_parts, part.content)
     elseif type(part.content) == 'table' then
       for _, child in ipairs(part.content) do
         walk(child)
@@ -196,9 +289,125 @@ local function message_text(message)
   for _, part in ipairs(message.body or {}) do
     walk(part)
   end
-  return vim.trim(table.concat(#texts > 0 and texts or htmls, '\n')), attachments
+  local use_html = #html_parts > 0 and (W3M or #texts == 0)
+  if use_html then
+    for _, html in ipairs(html_parts) do
+      table.insert(htmls, html_to_text(html))
+    end
+  end
+  return function()
+    local parts = use_html and vim.tbl_map(function(f)
+      return f()
+    end, htmls) or texts
+    return vim.trim(table.concat(parts, '\n'))
+  end,
+    attachments
 end
 
+local QUOTE_HEADERS = { From = true, Sent = true, Date = true, To = true, Cc = true, Subject = true }
+
+local function quote_header(line)
+  local name = line:match '^%s*%**(%a+):%**%s'
+  return name and QUOTE_HEADERS[name] and name
+end
+
+--- Whether the quoted history of a reply starts at line `i`: Outlook's "From: … Sent:/Date: …" block, Gmail's
+--- "On … wrote:" (which w3m may wrap onto two lines), "-----Original Message-----", or a `>` quote.
+local function quote_start(lines, i)
+  local line = lines[i]
+  if quote_header(line) == 'From' then
+    for j = i + 1, math.min(i + 4, #lines) do
+      local name = quote_header(lines[j])
+      if name == 'Sent' or name == 'Date' then
+        return true
+      end
+    end
+    return false
+  end
+  if line:match '^%s*On%s' and (line:match 'wrote:%s*$' or (lines[i + 1] or ''):match 'wrote:%s*$') then
+    return true
+  end
+  return line:match '^%s*%-%-%-%-%-+%s*Original Message' ~= nil or line:match '^%s*>' ~= nil
+end
+
+--- The text without the quoted history of a reply; the line after the reply says how much was folded.
+local function fold_quotes(text)
+  local lines = vim.split(text, '\n', { plain = true })
+  for i = 1, #lines do
+    if quote_start(lines, i) then
+      local kept = vim.list_slice(lines, 1, i - 1)
+      -- the separator Outlook puts above the quoted headers (a row of underscores, or w3m's rule for an <hr>)
+      while #kept > 0 and (vim.trim(kept[#kept]) == '' or kept[#kept]:match '^%s*[_━─-]+%s*$') do
+        table.remove(kept)
+      end
+      table.insert(kept, '')
+      table.insert(kept, ('\27[2m[… %d quoted lines folded]\27[0m'):format(#lines - i + 1))
+      return table.concat(kept, '\n')
+    end
+  end
+  return text
+end
+
+--- Colours the body of a message for the terminal: the header blocks of quoted replies ("From: … Sent: …") dimmed
+--- under a rule, `>` quotes dimmed, inline comment markers ("[Ritesh]") and @mentions highlighted, links underlined.
+local function colorize(text, width)
+  local dim, reset = '\27[2m', '\27[0m'
+  local rule = dim .. string.rep('─', width) .. reset
+  local lines = vim.split(text, '\n', { plain = true })
+  local result = {}
+  local in_headers = false
+  for i, line in ipairs(lines) do
+    if not in_headers and quote_header(line) == 'From' and quote_start(lines, i) then
+      in_headers = true
+      table.insert(result, rule)
+    elseif in_headers and vim.trim(line) == '' then
+      in_headers = false -- the block ends at a blank line; long To:/Cc: lines may wrap within it
+    end
+    if in_headers or line:match '^%s*>' then
+      table.insert(result, dim .. line .. reset)
+    else
+      line = line:gsub('(https?://[^%s<>"\')]+)', '\27[4;34m%1\27[0m')
+      line = line:gsub("^(%s*)(%[[%a][%w .,'-]*%])", '%1\27[1;35m%2\27[0m')
+      line = line:gsub('(%f[%w@]@%u[%w]*,? ?%u?[%w]*)', '\27[36m%1\27[0m')
+      table.insert(result, line)
+    end
+  end
+  return table.concat(result, '\n')
+end
+
+--- The messages of a thread (a forest: lists of [message, replies]), newest first.
+local function thread_messages(thread)
+  local messages = {}
+  local function collect(node)
+    if type(node) ~= 'table' then
+      return
+    end
+    if node.id and node.headers then
+      table.insert(messages, node)
+      return
+    end
+    for _, child in ipairs(node) do
+      collect(child)
+    end
+  end
+  collect(thread)
+  for i, m in ipairs(messages) do
+    m.liveq_index = i -- the order of the reply tree, to break ties of dates
+  end
+  table.sort(messages, function(a, b)
+    if (a.timestamp or 0) ~= (b.timestamp or 0) then
+      return (a.timestamp or 0) > (b.timestamp or 0)
+    end
+    return a.liveq_index > b.liveq_index
+  end)
+  for i, m in ipairs(messages) do
+    m.liveq_index = #messages - i + 1 -- now the position by date, oldest first, for the dividers
+  end
+  return messages
+end
+
+--- The thread as text, newest message first. `--plain`: Markdown for the float, without colours. `--fold`: without
+--- the quoted history of each reply (alt-h in the picker).
 local function show(opts, rest)
   local id = rest[1]
   if not is_thread(id) then
@@ -213,27 +422,28 @@ local function show(opts, rest)
   if plain then
     bold, dim, reset = '', '', ''
   end
-  local messages = {}
-  local function collect(node)
-    -- a thread is a forest: lists of [message, replies]
-    if type(node) ~= 'table' then
-      return
-    end
-    if node.id and node.headers then
-      table.insert(messages, node)
-      return
-    end
-    for _, child in ipairs(node) do
-      collect(child)
+  local messages = thread_messages(thread)
+  local width = text_width()
+  -- start rendering every message (w3m runs in parallel) before printing the first
+  local bodies = {}
+  for i, m in ipairs(messages) do
+    local text, attachments = message_text(m)
+    bodies[i] = { text = text, attachments = attachments }
+  end
+  local subject
+  for _, m in ipairs(messages) do
+    if m.liveq_index == 1 then
+      subject = (m.headers or {}).Subject
     end
   end
-  collect(thread)
-  for index, m in ipairs(messages) do
+  out((plain and '# ' or '') .. bold .. (subject or (messages[1] and messages[1].headers or {}).Subject or '') .. reset)
+  for i, m in ipairs(messages) do
     local h = m.headers or {}
-    if index == 1 then
-      out((plain and '# ' or '') .. bold .. (h.Subject or '') .. reset)
+    if not plain and #messages > 1 then
+      local label = (' %d/%d '):format(m.liveq_index, #messages)
+      out('\27[33m' .. string.rep('━', 2) .. label .. string.rep('━', width - 2 - #label) .. reset)
     end
-    out(((plain and '## ' or '') .. '%s%s%s  %s%s%s'):format(bold, h.From or '', reset, dim, h.Date or '', reset))
+    out(((plain and '## ' or '') .. '%s%s%s  %s%s%s'):format(plain and '' or '\27[1;32m', h.From or '', reset, dim, h.Date or '', reset))
     for _, header in ipairs { 'To', 'Cc' } do
       if h[header] then
         out(('%s%s:%s %s'):format(dim, header, reset, h[header]))
@@ -242,12 +452,22 @@ local function show(opts, rest)
     if m.tags and #m.tags > 0 then
       out(('%sTags:%s %s'):format(dim, reset, table.concat(m.tags, ' ')))
     end
-    local text, attachments = message_text(m)
-    for _, a in ipairs(attachments) do
+    for _, a in ipairs(bodies[i].attachments) do
       out(('%sAttachment:%s %s'):format(dim, reset, a))
     end
     out ''
-    out(text ~= '' and text or (dim .. '(no text part)' .. reset))
+    local text = bodies[i].text()
+    if opts.fold then
+      text = fold_quotes(text)
+      if plain then
+        text = text:gsub('\27%[[%d;]*m', '')
+      end
+    end
+    if text == '' then
+      out(dim .. '(no text part)' .. reset)
+    else
+      out(plain and text or colorize(text, width))
+    end
     out ''
   end
 end
@@ -364,20 +584,7 @@ local function html(_, rest)
   if not thread then
     fail(err)
   end
-  local messages = {}
-  local function collect(node)
-    if type(node) ~= 'table' then
-      return
-    end
-    if node.id and node.headers then
-      table.insert(messages, node)
-      return
-    end
-    for _, child in ipairs(node) do
-      collect(child)
-    end
-  end
-  collect(thread)
+  local messages = thread_messages(thread) -- newest first, as in the preview
   if #messages == 0 then
     fail('no message in ' .. id)
   end
@@ -389,7 +596,12 @@ local function html(_, rest)
     fail('cannot create a directory in ' .. tmp)
   end
 
-  local subject = (messages[1].headers or {}).Subject or ''
+  local subject = (messages[#messages].headers or {}).Subject or ''
+  for _, m in ipairs(messages) do
+    if m.liveq_index == 1 then
+      subject = (m.headers or {}).Subject or subject
+    end
+  end
   local page = {
     '<!doctype html><html><head><meta charset="utf-8">',
     '<title>' .. escape_html(subject) .. '</title>',

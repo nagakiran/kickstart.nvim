@@ -25,6 +25,17 @@ function M.open(source, query)
   vim.keymap.set('n', '<CR>', function()
     require('liveq.picker').search(source, buffer_query(buf))
   end, { buffer = buf, desc = 'Search ' .. source.title .. ' with this query' })
+  -- :w searches too, so the edited query goes back to the picker
+  vim.api.nvim_create_autocmd('BufWritePost', {
+    buffer = buf,
+    desc = 'Search ' .. source.title .. ' with the saved query',
+    callback = function()
+      vim.schedule(function()
+        vim.cmd 'stopinsert'
+        require('liveq.picker').search(source, buffer_query(buf))
+      end)
+    end,
+  })
   if source.validate then
     vim.keymap.set('n', '<localleader>v', function()
       local out = util.run(source, { 'validate', '--', buffer_query(buf) })

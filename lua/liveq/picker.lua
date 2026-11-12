@@ -104,6 +104,16 @@ function M.search(source, query)
         vim.notify('Yanked: ' .. text)
       end,
     },
+    ['alt-b'] = {
+      desc = 'buffer',
+      fn = function(items)
+        -- each in its own buffer; the last one is left in the window
+        for _, item in ipairs(items) do
+          vim.api.nvim_set_current_win(origin_win)
+          require('liveq.show').buffer(source, item.id)
+        end
+      end,
+    },
     ['ctrl-v'] = {
       desc = 'show',
       fn = function(items)
@@ -166,20 +176,40 @@ function M.search(source, query)
       table.insert(header, (key:gsub('^ctrl%-', '^')) .. ' ' .. actions[key].desc)
     end
   end
+  -- keys that toggle a flag of the preview's `show` (e.g. folding quoted mail); the state lives in a file that the
+  -- preview command tests, so it survives reopening the picker within this session
+  local preview_flags = ''
+  local fzf_keymap = { ['tab'] = complete, ['ctrl-space'] = 'toggle' }
+  source.toggle_state = source.toggle_state or {}
+  local toggle_keys = vim.tbl_keys(source.preview_toggles or {})
+  table.sort(toggle_keys)
+  for _, key in ipairs(toggle_keys) do
+    local toggle = source.preview_toggles[key]
+    source.toggle_state[key] = source.toggle_state[key] or vim.fn.tempname()
+    local state = vim.fn.shellescape(source.toggle_state[key])
+    preview_flags = preview_flags .. (' $([ -e %s ] && printf %%s %s)'):format(state, vim.fn.shellescape(toggle.flag))
+    fzf_keymap[key] = ('execute-silent([ -e %s ] && rm -f %s || touch %s)+refresh-preview'):format(state, state, state)
+    table.insert(header, (key:gsub('^ctrl%-', '^')) .. ' ' .. toggle.desc)
+  end
   vim.list_extend(header, { '^e edit' })
   if source.saved then
     vim.list_extend(header, { '^r saved', '^s save' })
   end
   table.insert(header, '^q buffer')
 
-  fzf.fzf_live(('sleep 0.3; %s search -f fzf -l %d -- <query>'):format(backend, source.limit or 100), {
+  -- the query is written to a file at each reload, so that resume() reopens the picker where it was left
+  source.query_state = source.query_state or vim.fn.tempname()
+  M.last_source = source
+  local record = ('printf %%s <query> > %s; '):format(vim.fn.shellescape(source.query_state))
+  fzf.fzf_live(record .. ('sleep 0.3; %s search -f fzf -l %d -- <query>'):format(backend, source.limit or 100), {
+    liveq_source = source.name, -- tells resume() that fzf-lua's last picker is this one
     prompt = source.prompt or (source.name .. '> '),
     query = query,
     search = query,
     exec_empty_query = true,
-    keymap = { fzf = { ['tab'] = complete, ['ctrl-space'] = 'toggle' } },
+    keymap = { fzf = fzf_keymap },
     winopts = { title = ' ' .. source.title .. ' ', preview = { layout = 'vertical', vertical = 'down:50%' } },
-    preview = backend .. ' show -- {1}',
+    preview = backend .. ' show' .. preview_flags .. ' -- {1}',
     fzf_opts = {
       ['--ansi'] = true,
       ['--delimiter'] = '\t',
@@ -189,6 +219,30 @@ function M.search(source, query)
     },
     actions = fzf_actions,
   })
+end
+
+--- Reopens the last search of a source (of the last searched source, when nil). A picker hidden with fzf-lua's
+--- <M-Esc> comes back as it was, cursor and selection included; otherwise the search runs again with the last query.
+function M.resume(source)
+  source = source or M.last_source
+  if not source then
+    vim.notify('liveq: no search to resume', vim.log.levels.WARN)
+    return
+  end
+  local ok, win = pcall(require, 'fzf-lua.win')
+  local data = ok and require('fzf-lua.config').__resume_data
+  local hidden = ok and win.__SELF()
+  if hidden and hidden:hidden() and data and data.opts and data.opts.liveq_source == source.name then
+    hidden:unhide()
+    return
+  end
+  local query
+  local file = source.query_state and io.open(source.query_state, 'r')
+  if file then
+    query = (file:read '*a'):gsub('\n+$', '')
+    file:close()
+  end
+  M.search(source, query)
 end
 
 --- Picks a saved query (`<backend> saved -f tsv`: label, query, key, origin) and searches with it.

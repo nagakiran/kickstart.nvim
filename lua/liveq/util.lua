@@ -26,7 +26,8 @@ function M.run(source, args, opts)
   opts = opts or {}
   local cmd = M.cmd(source)
   vim.list_extend(cmd, args)
-  local ok, job = pcall(vim.system, cmd, { text = true })
+  -- opts.env: extra environment variables, e.g. LIVEQ_WIDTH (the text width of the window that shows the output)
+  local ok, job = pcall(vim.system, cmd, { text = true, env = opts.env })
   if not ok then
     vim.notify(tostring(job), vim.log.levels.ERROR, { title = 'liveq' })
     return nil

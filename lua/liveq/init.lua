@@ -67,6 +67,18 @@ function M.show(name, id)
   end
 end
 
+--- Reopens the last search of a source, or of the last searched one when `name` is nil or empty.
+function M.resume(name)
+  local spec
+  if name and name ~= '' then
+    spec = get(name)
+    if not spec then
+      return
+    end
+  end
+  require('liveq.picker').resume(spec)
+end
+
 function M.open(name, id)
   local spec = get(name)
   if spec then
@@ -106,6 +118,7 @@ function M.register(name, spec)
   end
   define(commands.search, M.search, spec.title .. ': live search', '?')
   define(commands.saved, M.saved, spec.title .. ': saved queries', 0)
+  define(commands.resume, M.resume, spec.title .. ': resume the last search', 0)
   define(commands.query, M.query, spec.title .. ': query buffer', '?')
   define(commands.show, M.show, spec.title .. ': show item', '?')
 
@@ -119,6 +132,7 @@ function M.register(name, spec)
   end
   map(keymaps.search, M.search, spec.title .. ': search')
   map(keymaps.saved, M.saved, spec.title .. ': saved queries')
+  map(keymaps.resume, M.resume, spec.title .. ': resume the last search')
   map(keymaps.query, M.query, spec.title .. ': query buffer')
   map(keymaps.show, M.show, spec.title .. ': show item under cursor')
   map(keymaps.open, M.open, spec.title .. ': open item under cursor in browser')
@@ -137,6 +151,12 @@ function M.setup(opts)
     { 'LiveqQuery', M.query, 'liveq: query buffer' },
     { 'LiveqShow', M.show, 'liveq: show item' },
   }
+  vim.api.nvim_create_user_command('LiveqResume', function(o)
+    M.resume(o.args)
+  end, { nargs = '?', desc = 'liveq: resume the last search (of a source, or the last one)', complete = complete_sources })
+  vim.keymap.set('n', (opts or {}).resume_key or '<leader>lr', function()
+    M.resume()
+  end, { desc = 'liveq: resume the last search' })
   for _, g in ipairs(generic) do
     vim.api.nvim_create_user_command(g[1], function(o)
       local name, rest = o.args:match '^(%S+)%s*(.*)$'

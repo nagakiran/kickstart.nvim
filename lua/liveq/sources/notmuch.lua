@@ -67,6 +67,9 @@ return function(opts)
     end,
     syntax = syntax,
 
+    -- alt-h in the picker hides the quoted history of each reply in the preview (`show --fold`)
+    preview_toggles = { ['alt-h'] = { flag = '--fold', desc = 'fold quotes' } },
+
     actions = {
       -- like neomutt's <F7> (viewhtmlmsg): the thread rendered as a local HTML page, inline images included
       ['ctrl-o'] = {

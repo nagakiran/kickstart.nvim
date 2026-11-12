@@ -93,10 +93,10 @@ step_system() {
     mac)
       # make and a C compiler (telescope-fzf-native, treesitter parsers) come from the Command Line Tools
       xcode-select -p >/dev/null 2>&1 || warn "Command Line Tools missing: run xcode-select --install"
-      brew_install ripgrep fd xz # git and curl ship with macOS and the Command Line Tools
+      brew_install ripgrep fd xz w3m # w3m: HTML mail in liveq's previews; git and curl ship with macOS and the Command Line Tools
       ;;
     apt)
-      apt_install make gcc unzip git curl ripgrep fd-find xclip \
+      apt_install make gcc unzip git curl ripgrep fd-find xclip w3m \
         build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev libncurses-dev \
         xz-utils tk-dev libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev
       ;;
