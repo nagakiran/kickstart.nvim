@@ -5,6 +5,13 @@
 -- Completes QUERY with a picker on the terminal (fzf) and prints the new query. It only needs the backend's
 -- `complete -f json` command, so a source does not have to implement a picker of its own; used by the TAB of `lq`
 -- (shell) and of the fzf-lua picker. Exits with status 1, printing nothing, when nothing was picked.
+--
+--   nvim -l cli.lua match {first|next|prev} FILE     prints the fzf action that scrolls the preview to a match
+--   nvim -l cli.lua scroll FILE                      sends `match first` to the fzf of $FZF_PORT (with curl)
+--
+-- FILE is the one a backend's `show --match` wrote ($LIVEQ_MATCH_FILE): the item's id, the index of the current match,
+-- and the line numbers of the matches. `scroll` runs in the background after the preview is printed, since fzf only
+-- applies a scroll offset given once the preview is complete; `match next/prev` are bound to keys of the picker.
 
 local here = debug.getinfo(1, 'S').source:sub(2)
 local lua_root = vim.fs.dirname(vim.fs.dirname(here))
@@ -121,10 +128,44 @@ local function pick(opts, rest)
   io.stdout:write(new_text .. '\n')
 end
 
+--- The fzf action that shows the current match of FILE (after moving to the next or previous one, cyclically) a third
+--- down the preview, with "match i/n" as the preview's label; the top of the preview when there is none.
+local function match_action(how, file)
+  local f = file and io.open(file, 'r')
+  if not f then
+    return 'change-preview-label()'
+  end
+  local id, index, numbers = f:read '*l', tonumber(f:read '*l' or '') or 0, f:read '*l' or ''
+  f:close()
+  local lines = vim.split(numbers, ' ', { trimempty = true })
+  if #lines == 0 then
+    return how == 'first' and 'change-preview-window(+1)+change-preview-label()' or 'change-preview-label( no match )'
+  end
+  if how == 'next' then
+    index = index % #lines + 1
+  elseif how == 'prev' then
+    index = (index - 2) % #lines + 1
+  end
+  index = math.max(1, math.min(index, #lines))
+  f = io.open(file, 'w')
+  if f then
+    f:write(id or '', '\n', index, '\n', numbers, '\n')
+    f:close()
+  end
+  return ('change-preview-window(+%d/3)+change-preview-label( match %d/%d )'):format(lines[index], index, #lines)
+end
+
 local command = _G.arg[1]
 local opts, rest = parse(vim.list_slice(_G.arg, 2))
 if command == 'pick' then
   pick(opts, rest)
+elseif command == 'match' then
+  io.stdout:write(match_action(rest[1], rest[2]))
+elseif command == 'scroll' then
+  local port = os.getenv 'FZF_PORT'
+  if port and port ~= '' and vim.fn.executable 'curl' == 1 then
+    vim.system({ 'curl', '-s', '-m', '2', '-XPOST', 'localhost:' .. port, '-d', match_action('first', rest[1]) }):wait()
+  end
 else
-  fail('unknown command: ' .. tostring(command) .. ' (expected: pick)')
+  fail('unknown command: ' .. tostring(command) .. ' (expected: pick, match, scroll)')
 end

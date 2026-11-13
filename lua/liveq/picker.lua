@@ -106,19 +106,19 @@ function M.search(source, query)
     },
     ['alt-b'] = {
       desc = 'buffer',
-      fn = function(items)
-        -- each in its own buffer; the last one is left in the window
+      fn = function(items, _, q)
+        -- each in its own buffer; the last one is left in the window, at the first match of the query (n/N for the next)
         for _, item in ipairs(items) do
           vim.api.nvim_set_current_win(origin_win)
-          require('liveq.show').buffer(source, item.id)
+          require('liveq.show').buffer(source, item.id, { query = q })
         end
       end,
     },
     ['ctrl-v'] = {
       desc = 'show',
-      fn = function(items)
+      fn = function(items, _, q)
         if items[1] then
-          require('liveq.show').show(source, items[1].id)
+          require('liveq.show').show(source, items[1].id, { query = q })
         end
       end,
     },
@@ -133,8 +133,8 @@ function M.search(source, query)
 
   local fzf_actions = {}
   for key, action in pairs(actions) do
-    fzf_actions[key] = function(selected)
-      action.fn(util.items(source, selected), source)
+    fzf_actions[key] = function(selected, opts)
+      action.fn(util.items(source, selected), source, last_query(opts))
     end
   end
   -- the actions on the query rather than on the items
@@ -191,6 +191,23 @@ function M.search(source, query)
     fzf_keymap[key] = ('execute-silent([ -e %s ] && rm -f %s || touch %s)+refresh-preview'):format(state, state, state)
     table.insert(header, (key:gsub('^ctrl%-', '^')) .. ' ' .. toggle.desc)
   end
+  -- a source whose `show` takes `--match QUERY` highlights the query's words in the preview and writes the lines that
+  -- have them to a file; the preview then scrolls to the first one (sent to fzf through --listen, since fzf only takes
+  -- a scroll offset once the preview is complete), and alt-n/alt-p go to the next and previous ones
+  local preview_prefix, preview_match, preview_suffix = '', '', ''
+  if source.match then
+    source.match_state = source.match_state or vim.fn.tempname()
+    local state = vim.fn.shellescape(source.match_state)
+    local cli = ('%s -l %s'):format(vim.fn.shellescape(vim.v.progpath), vim.fn.shellescape(cli_path()))
+    preview_prefix = 'LIVEQ_MATCH_FILE=' .. state .. ' '
+    preview_match = ' --match {q}'
+    preview_suffix = ('; %s scroll %s >/dev/null 2>&1 &'):format(cli, state)
+    fzf_keymap['alt-n'] = ('transform(%s match next %s)'):format(cli, state)
+    fzf_keymap['alt-p'] = ('transform(%s match prev %s)'):format(cli, state)
+    -- a new item's preview starts at the top until its scroll arrives, not at the offset of the previous item's match
+    fzf_keymap['focus'] = 'change-preview-window(+1)+change-preview-label()'
+    table.insert(header, 'alt-n/p match')
+  end
   vim.list_extend(header, { '^e edit' })
   if source.saved then
     vim.list_extend(header, { '^r saved', '^s save' })
@@ -209,8 +226,9 @@ function M.search(source, query)
     exec_empty_query = true,
     keymap = { fzf = fzf_keymap },
     winopts = { title = ' ' .. source.title .. ' ', preview = { layout = 'vertical', vertical = 'down:50%' } },
-    preview = backend .. ' show' .. preview_flags .. ' -- {1}',
+    preview = preview_prefix .. backend .. ' show' .. preview_flags .. preview_match .. ' -- {1}' .. preview_suffix,
     fzf_opts = {
+      ['--listen'] = source.match and true or nil, -- exports $FZF_PORT to the preview command
       ['--ansi'] = true,
       ['--delimiter'] = '\t',
       ['--with-nth'] = '2',

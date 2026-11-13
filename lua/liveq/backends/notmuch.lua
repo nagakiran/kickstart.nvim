@@ -1,7 +1,8 @@
 -- The notmuch backend of liveq, run with `nvim -l` (no plugins, no user config):
 --
 --   nvim -l notmuch.lua search -f fzf -l LIMIT -- QUERY
---   nvim -l notmuch.lua show [--plain] [--fold] -- thread:ID
+--   nvim -l notmuch.lua show [--plain] [--fold] [--match QUERY] -- thread:ID
+--   nvim -l notmuch.lua terms -- QUERY                       the words of QUERY to highlight, as JSON: [["word"], ["a", "phrase"]]
 --   nvim -l notmuch.lua complete -f json [-c CURSOR] -- QUERY
 --   nvim -l notmuch.lua url -- thread:ID                     a link to the thread, from the $LIVEQ_MAIL_URL template
 --   nvim -l notmuch.lua html -- thread:ID                    writes the thread as an HTML page in $TMPDIR; prints its path
@@ -33,8 +34,14 @@ local DATES = { 'today', 'yesterday', '1d..', '7d..', '1w..', '2w..', '1M..', '3
 local MIMETYPES = { 'application/pdf', 'text/calendar', 'image/png', 'image/jpeg', 'text/html' }
 local MAX_CANDIDATES = 200
 
+local collected -- when set, out() keeps the lines here instead of printing them (show --match highlights them first)
+
 local function out(text)
-  io.stdout:write(text, '\n')
+  if collected then
+    table.insert(collected, text)
+  else
+    io.stdout:write(text, '\n')
+  end
 end
 
 local function fail(message, code)
@@ -135,6 +142,185 @@ local function live_query(query)
     return query
   end
   return ('%s%s(%s%s or %s%s*)'):format(before, open, prefix, term, prefix, term)
+end
+
+-- -- matches of a query -----------------------------------------------------------------------------------------
+
+-- the prefixes whose terms are words of the text that is shown (the others are tags, dates, addresses, …)
+local TEXT_PREFIXES = { subject = true, body = true }
+
+--- The words of a query that the text of a thread may contain, to highlight: the free words and phrases and those of
+--- `subject:`/`body:`, but not negated ones (`-word`, `not word`), operators or other prefixes. Each is a list of
+--- lowercase words (a phrase has several).
+local function query_terms(query)
+  local terms = {}
+  local negated = false
+  local i, n = 1, #query
+  while i <= n do
+    local c = query:sub(i, i)
+    if c:match '[%s()]' then
+      i = i + 1
+    else
+      local minus = c == '-'
+      if minus then
+        i = i + 1
+      end
+      local prefix = query:match('^(%a+):', i)
+      if prefix then
+        i = i + #prefix + 1
+      end
+      local value
+      if query:sub(i, i) == '"' then
+        local close = query:find('"', i + 1, true) or n + 1
+        value, i = query:sub(i + 1, close - 1), close + 1
+      else
+        local s, e = query:find('^[^%s()]*', i)
+        value, i = query:sub(s, e), e + 1
+      end
+      if not prefix and OPERATORS[value:lower()] then
+        negated = value:lower() == 'not'
+      else
+        if not minus and not negated and (not prefix or TEXT_PREFIXES[prefix:lower()]) then
+          local words = {}
+          for w in value:gmatch '[%w_]+' do
+            table.insert(words, w:lower())
+          end
+          if #words > 1 or (words[1] and #words[1] > 1) then
+            table.insert(terms, words)
+          end
+        end
+        negated = false
+      end
+    end
+  end
+  return terms
+end
+
+local function terms(_, rest)
+  out(vim.json.encode(query_terms(rest[1] or '')))
+end
+
+--- Lua patterns (on lowercase text) for the terms: each starts at a word, and its last word matches as a prefix
+--- (notmuch also matches stemmed forms, and the picker's last word as a prefix: `config` finds "configuration").
+local function term_patterns(query)
+  local patterns = {}
+  for _, words in ipairs(query_terms(query)) do
+    table.insert(patterns, '%f[%w]' .. table.concat(words, '[^%w]+'))
+  end
+  return patterns
+end
+
+local HL_ON, HL_OFF = '\27[7m', '\27[27m'
+
+--- The line with the matches of the patterns in reverse video, and the set of the patterns (indexes) found in it, nil
+--- when none. Colour codes in the line are kept (the match is looked for in the visible text), and the highlight is
+--- turned on again after each of them.
+local function highlight(line, patterns)
+  local visible, at = {}, {} -- the visible bytes, and where each is in the line
+  local i = 1
+  while i <= #line do
+    local _, e = line:find('^\27%[[%d;]*m', i)
+    if e then
+      i = e + 1
+    else
+      table.insert(visible, line:sub(i, i))
+      at[#visible] = i
+      i = i + 1
+    end
+  end
+  local text = table.concat(visible):lower()
+  local on = {}
+  local found
+  for p, pattern in ipairs(patterns) do
+    local init = 1
+    while true do
+      local s, e = text:find(pattern, init)
+      if not s then
+        break
+      end
+      found = found or {}
+      found[p] = true
+      for k = s, e do
+        on[k] = true
+      end
+      init = e + 1
+    end
+  end
+  if not found then
+    return line, nil
+  end
+  local result = {}
+  local k = 0 -- visible bytes copied
+  i = 1
+  while i <= #line do
+    local _, e = line:find('^\27%[[%d;]*m', i)
+    if e then
+      table.insert(result, line:sub(i, e))
+      if on[k] and on[k + 1] then
+        table.insert(result, HL_ON) -- e.g. after the reset that ends a link
+      end
+      i = e + 1
+    else
+      k = k + 1
+      if on[k] and not on[k - 1] then
+        table.insert(result, HL_ON)
+      end
+      table.insert(result, line:sub(i, i))
+      if on[k] and not on[k + 1] then
+        table.insert(result, HL_OFF)
+      end
+      i = i + 1
+    end
+  end
+  return table.concat(result), found
+end
+
+--- Prints the lines kept by out() with the matches of the query highlighted, and writes the numbers of the lines that
+--- have one to $LIVEQ_MATCH_FILE (liveq's picker scrolls the preview to them): `id`, the index of the match to show
+--- first, and the line numbers separated by spaces. The one shown first is the first line with the term that is the
+--- rarest in the thread, below the subject: a common term (e.g. a word of the subject) is in every message, so the
+--- rarest one is closer to why the thread matched.
+local function print_highlighted(lines, query, id)
+  local patterns = term_patterns(query)
+  local text = vim.split(table.concat(lines, '\n'), '\n', { plain = true })
+  local matches, found_in = {}, {}
+  local count = {} -- lines per pattern
+  for n, line in ipairs(text) do
+    local found
+    if #patterns > 0 then
+      line, found = highlight(line, patterns)
+      if found then
+        table.insert(matches, n)
+        found_in[#matches] = found
+        for p in pairs(found) do
+          count[p] = (count[p] or 0) + 1
+        end
+      end
+    end
+    io.stdout:write(line, '\n')
+  end
+  io.stdout:flush()
+  local rarest
+  for p, c in pairs(count) do
+    if not rarest or c < count[rarest] or (c == count[rarest] and p < rarest) then
+      rarest = p
+    end
+  end
+  local first = matches[1] and 1 or 0
+  for i, n in ipairs(matches) do
+    if n > 1 and found_in[i][rarest] then
+      first = i
+      break
+    end
+  end
+  local file = os.getenv 'LIVEQ_MATCH_FILE'
+  if file and file ~= '' then
+    local f = io.open(file, 'w')
+    if f then
+      f:write(id, '\n', first, '\n', table.concat(matches, ' '), '\n')
+      f:close()
+    end
+  end
 end
 
 local function search(opts, rest)
@@ -407,11 +593,20 @@ local function thread_messages(thread)
 end
 
 --- The thread as text, newest message first. `--plain`: Markdown for the float, without colours. `--fold`: without
---- the quoted history of each reply (alt-h in the picker).
+--- the quoted history of each reply (alt-h in the picker). `--match QUERY`: the words of the query highlighted, and
+--- the lines that have them written to $LIVEQ_MATCH_FILE (see print_highlighted).
 local function show(opts, rest)
   local id = rest[1]
   if not is_thread(id) then
     return -- e.g. a hint line of fzf
+  end
+  if opts.match and not opts.plain then
+    collected = {}
+    show({ fold = opts.fold }, rest)
+    local lines = collected
+    collected = nil
+    print_highlighted(lines, opts.match, id)
+    return
   end
   local thread, err = json { 'show', '--format=json', '--entire-thread=true', '--include-html', id }
   if not thread then
@@ -859,7 +1054,7 @@ local function tag(_, rest)
   end
 end
 
-local commands = { search = search, show = show, html = html, complete = complete, url = url, saved = saved, save = save, tag = tag }
+local commands = { search = search, show = show, terms = terms, html = html, complete = complete, url = url, saved = saved, save = save, tag = tag }
 local command = _G.arg[1]
 if not commands[command] then
   fail('unknown command: ' .. tostring(command) .. ' (expected: ' .. table.concat(vim.tbl_keys(commands), ', ') .. ')', 2)

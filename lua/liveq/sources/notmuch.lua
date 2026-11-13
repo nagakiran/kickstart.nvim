@@ -52,6 +52,7 @@ return function(opts)
     end,
     limit = opts.limit or 100,
 
+    match = true, -- `show --match QUERY` highlights the query's words and `terms -- QUERY` lists them
     saved = true, -- notmuch's named queries (query.NAME); usable as `query:NAME` in any query
     url = opts.url ~= nil,
 

@@ -4,7 +4,50 @@ local util = require 'liveq.util'
 
 local M = {}
 
-function M.show(source, id)
+--- Puts the cursor of the current window on the first match of a query, and the query's words in the search register
+--- (highlighted, `n`/`N` go through them). The words come from the backend (`terms -- QUERY`, sources with `match`);
+--- the first match is the first one of the word that is the rarest in the text, below its title line, as in the preview.
+local function goto_matches(source, query)
+  if not source.match or not query or vim.trim(query) == '' then
+    return
+  end
+  local out = util.run(source, { 'terms', '--', query }, { silent = true })
+  local ok, terms = pcall(vim.json.decode, out or '')
+  if not ok or type(terms) ~= 'table' or #terms == 0 then
+    return
+  end
+  local patterns = {}
+  for _, words in ipairs(terms) do
+    table.insert(patterns, [[\<]] .. table.concat(words, [[\_W\+]]))
+  end
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local best_count, best_pos
+  for _, pattern in ipairs(patterns) do
+    local re = vim.regex([[\c]] .. pattern)
+    local count, pos = 0, nil
+    for n = 2, #lines do
+      local col = re:match_str(lines[n])
+      if col then
+        count = count + 1
+        pos = pos or { n, col }
+      end
+    end
+    if pos and (not best_count or count < best_count) then
+      best_count, best_pos = count, pos
+    end
+  end
+  local all = [[\c\%(]] .. table.concat(patterns, [[\|]]) .. [[\)]]
+  vim.fn.setreg('/', all)
+  vim.fn.histadd('/', all)
+  vim.v.hlsearch = 1
+  if best_pos then
+    vim.api.nvim_win_set_cursor(0, best_pos)
+    vim.cmd 'normal! zz'
+  end
+end
+
+--- opts.query: the search the item was found with; the cursor goes to its first match.
+function M.show(source, id, opts)
   id = (id and id ~= '') and id or util.id_under_cursor(source)
   if not id then
     vim.notify('No ' .. (source.item_name or 'item') .. ' under the cursor', vim.log.levels.WARN)
@@ -32,6 +75,7 @@ function M.show(source, id)
     title = ' ' .. id .. ' ',
   })
   vim.wo[win].wrap = true
+  goto_matches(source, opts and opts.query)
   for _, lhs in ipairs { 'q', '<Esc>' } do
     vim.keymap.set('n', lhs, '<cmd>close<CR>', { buffer = buf, nowait = true })
   end
@@ -43,8 +87,9 @@ function M.show(source, id)
 end
 
 --- Opens an item in a buffer of its own in the current window (`<backend> show --plain -- ID`, as Markdown), named
---- `liveq://SOURCE/ID` so that opening it again reuses the buffer, with its text refreshed.
-function M.buffer(source, id)
+--- `liveq://SOURCE/ID` so that opening it again reuses the buffer, with its text refreshed. opts.query: the search the
+--- item was found with; the cursor goes to its first match.
+function M.buffer(source, id, opts)
   id = (id and id ~= '') and id or util.id_under_cursor(source)
   if not id then
     vim.notify('No ' .. (source.item_name or 'item') .. ' under the cursor', vim.log.levels.WARN)
@@ -71,6 +116,7 @@ function M.buffer(source, id)
   vim.bo[buf].filetype = 'markdown'
   vim.api.nvim_win_set_buf(0, buf)
   vim.wo.wrap = true
+  goto_matches(source, opts and opts.query)
   if source.url then
     vim.keymap.set('n', 'gx', function()
       M.open(source, id)
