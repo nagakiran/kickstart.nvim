@@ -20,6 +20,9 @@ return {
         end,
       },
       { 'nvim-telescope/telescope-ui-select.nvim' },
+      -- live_grep whose prompt is passed to rg as arguments, so filters can be typed inline:
+      -- `"pdf" -g *.go`, `"pdf" -g !*.md`, `"pdf" -t py`. Used by <leader>sg/sH/sG/sD.
+      { 'nvim-telescope/telescope-live-grep-args.nvim' },
 
       -- Useful for getting pretty icons, but requires a Nerd Font.
       { 'nvim-tree/nvim-web-devicons', enabled = vim.g.have_nerd_font },
@@ -102,6 +105,22 @@ return {
           ['ui-select'] = {
             require('telescope.themes').get_dropdown(),
           },
+          live_grep_args = {
+            auto_quoting = true, -- a prompt with no quotes is one literal term (`export pdf`); quote the term to add rg flags
+            mappings = {
+              i = {
+                -- Wrap what's typed in quotes and append a glob flag, ready for `*.go` / `!*.md`.
+                -- (<C-k> is taken by move_selection_previous above.)
+                ['<C-g>'] = function(prompt_bufnr)
+                  require('telescope-live-grep-args.actions').quote_prompt { postfix = ' -g ' }(prompt_bufnr)
+                end,
+                -- Same, but append a ripgrep file-type flag (`-t go`, `-T md` to exclude).
+                ['<C-t>'] = function(prompt_bufnr)
+                  require('telescope-live-grep-args.actions').quote_prompt { postfix = ' -t ' }(prompt_bufnr)
+                end,
+              },
+            },
+          },
         },
       }
 
@@ -109,6 +128,7 @@ return {
       pcall(require('telescope').load_extension, 'fzf')
       pcall(require('telescope').load_extension, 'ui-select')
       pcall(require('telescope').load_extension, 'media_files')
+      pcall(require('telescope').load_extension, 'live_grep_args')
 
       -- See `:help telescope.builtin`
       local builtin = require 'telescope.builtin'
@@ -121,13 +141,38 @@ return {
       vim.keymap.set('n', '<leader>lt', builtin.help_tags, { desc = '[L]ist [t]ags' })
       vim.keymap.set('n', '<leader>lh', builtin.help_tags, { desc = '[L]ist [H]elp tags' })
       vim.keymap.set('n', '<leader>sw', builtin.grep_string, { desc = '[S]earch current [W]ord' })
-      vim.keymap.set('n', '<leader>sg', builtin.live_grep, { desc = '[S]earch by [G]rep' })
+      -- live_grep with rg filters typed in the prompt (`"pdf" -g *.go`, `"pdf" -g !*.md`, `"pdf" -t py`;
+      -- <C-g>/<C-t> quote the term and add the flag) via telescope-live-grep-args. Falls back to
+      -- the builtin live_grep when the extension isn't installed.
+      --   opts.title   prompt title (a filter-syntax hint is appended)
+      --   opts.extra   extra rg flags, e.g. { '--hidden' }
+      local function grep_with_args(opts)
+        opts = opts or {}
+        local title = opts.title or 'Live Grep'
+        local extra = opts.extra or {}
+        local ok, lga = pcall(function()
+          return require('telescope').extensions.live_grep_args
+        end)
+        if ok and lga then
+          lga.live_grep_args {
+            cwd = opts.cwd,
+            prompt_title = title .. '  (-g glob, -t type)',
+            vimgrep_arguments = vim.list_extend(vim.deepcopy(require('telescope.config').values.vimgrep_arguments), extra),
+          }
+        else
+          builtin.live_grep {
+            cwd = opts.cwd,
+            prompt_title = title,
+            additional_args = function()
+              return extra
+            end,
+          }
+        end
+      end
+
+      vim.keymap.set('n', '<leader>sg', grep_with_args, { desc = '[S]earch by [G]rep' })
       vim.keymap.set('n', '<leader>sH', function()
-        require('telescope.builtin').live_grep {
-          additional_args = function(args)
-            return { '--hidden' }
-          end,
-        }
+        grep_with_args { title = 'Live Grep (hidden)', extra = { '--hidden' } }
       end, { desc = '[S]earch by [H]idden Grep' })
       vim.keymap.set('n', '<leader>sd', builtin.diagnostics, { desc = '[S]earch [D]iagnostics' })
       vim.keymap.set('n', '<leader>sr', builtin.resume, { desc = '[S]earch [R]esume' })
@@ -558,10 +603,7 @@ return {
       vim.keymap.set('n', '<leader>sG', function()
         local git_dir = vim.fn.system(string.format('git -C %s rev-parse --show-toplevel', vim.fn.expand '%:p:h'))
         git_dir = string.gsub(git_dir, '\n', '')
-        local opts = {
-          cwd = git_dir,
-        }
-        builtin.live_grep(opts)
+        grep_with_args { cwd = git_dir, title = 'Grep in ' .. vim.fn.fnamemodify(git_dir, ':t') .. '/ (git root)' }
       end, { desc = '[S]earch by [G]rep from git root' })
 
       -- Grep within a sub-directory chosen via an fzf-lua picker, rooted at the git root
@@ -580,7 +622,13 @@ return {
               if not selected or not selected[1] then
                 return
               end
-              builtin.live_grep { search_dirs = { root .. '/' .. selected[1] } }
+              -- Show the chosen dir (relative to the root) in the prompt title, and make it the
+              -- cwd so result paths are relative to it rather than repeating the prefix.
+              local rel = selected[1]:gsub('/+$', '')
+              grep_with_args {
+                cwd = root .. '/' .. rel,
+                title = 'Grep in ' .. vim.fn.fnamemodify(root, ':t') .. '/' .. rel .. '/',
+              }
             end,
           },
         })
