@@ -29,6 +29,7 @@ return {
   saved = true,
   validate = true,
   url = true,
+  tree = true, -- `search --tree`: alt-t shows the stories of an epic and the subtasks of a story under them
 
   id_pattern = '^%a[%w_]*%-%d+$',
   cursor_id_pattern = '%u[%u%d]+%-%d+',
