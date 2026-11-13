@@ -307,6 +307,10 @@ require('liveq').setup {
       commands = { search = 'MrSearch', saved = 'MrSaved', query = 'MrQuery', show = 'MrShow' },
       keymaps = { search = '<leader>Ms', saved = '<leader>Mr', query = '<leader>Mq', show = '<leader>Mi', open = '<leader>Mo' },
     },
+    bm = require 'liveq.sources.linkding' {
+      commands = { search = 'BookmarkSearch', query = 'BookmarkQuery' },
+      keymaps = { search = '<leader>lk' },
+    },
   },
 }
 
