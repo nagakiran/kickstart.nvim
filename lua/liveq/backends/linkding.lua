@@ -69,6 +69,10 @@ local function api(method, path, body)
   if body then
     vim.list_extend(cmd, { '--data-binary', vim.json.encode(body) })
   end
+  if method == 'DELETE' then
+    -- there is no JSON reply to check, so an HTTP error (404, 401) must fail curl itself
+    table.insert(cmd, '-f')
+  end
   table.insert(cmd, URL:gsub('/+$', '') .. '/api/' .. path)
   local result = vim.system(cmd, { text = true }):wait(60000)
   if result.code ~= 0 then
@@ -427,6 +431,23 @@ local function tag(_, rest)
   end
 end
 
+--- Deletes bookmarks on the server, then drops their rows from the cache (else they would come back with it).
+local function delete(_, rest)
+  local data = read_cache()
+  for _, id in ipairs(rest) do
+    local ok, err = api('DELETE', 'bookmarks/' .. id .. '/')
+    if not ok then
+      fail('deleting ' .. id .. ': ' .. err)
+    end
+    if data then
+      data.results = vim.tbl_filter(function(row)
+        return tostring(row.id) ~= tostring(id)
+      end, data.results)
+      write_cache(data)
+    end
+  end
+end
+
 -- -- complete -----------------------------------------------------------------------------------------------------
 
 local PREFIXES = {
@@ -521,7 +542,7 @@ local function complete(opts, rest)
   out(vim.json.encode { context = context, prefix = term, replace_start = start, replace_end = finish, candidates = candidates })
 end
 
-local commands = { search = search, show = show, complete = complete, url = url, refresh = refresh, tag = tag }
+local commands = { search = search, show = show, complete = complete, url = url, refresh = refresh, tag = tag, delete = delete }
 local command = _G.arg[1]
 if not commands[command] then
   fail('unknown command: ' .. tostring(command) .. ' (expected: ' .. table.concat(vim.tbl_keys(commands), ', ') .. ')', 2)

@@ -92,6 +92,30 @@ return function(opts)
           end
         end,
       },
+      ['ctrl-x'] = {
+        desc = 'delete',
+        fn = function(items, source)
+          if #items == 0 then
+            return
+          end
+          local titles = table.concat(
+            vim.tbl_map(function(i)
+              return '  ' .. i.title
+            end, items),
+            '\n'
+          )
+          local answer = vim.fn.confirm(('Delete %d bookmark(s) from linkding?\n%s'):format(#items, titles), '&Delete\n&Cancel', 2)
+          if answer == 1 then
+            local ids = vim.tbl_map(function(i)
+              return i.id
+            end, items)
+            if require('liveq.util').run(source, vim.list_extend({ 'delete', '--' }, ids)) then
+              vim.notify(('Deleted %d bookmark(s)'):format(#items))
+            end
+          end
+          reopen()
+        end,
+      },
       ['ctrl-t'] = {
         desc = 'tags',
         fn = function(items, source)
