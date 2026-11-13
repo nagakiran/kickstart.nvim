@@ -56,7 +56,8 @@ return function(opts)
     saved = true, -- notmuch's named queries (query.NAME); usable as `query:NAME` in any query
     url = opts.url ~= nil,
 
-    id_pattern = '^thread:%x+$',
+    id_pattern = { '^thread:%x+$', '^id:%S+$' }, -- threads, and messages in the threaded view
+    tree = true, -- `search --tree`: alt-t shows the messages of each thread, as mutt does
     cursor_id_pattern = 'thread:%x+',
 
     filetype = 'notmuchquery',

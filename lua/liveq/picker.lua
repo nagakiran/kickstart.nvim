@@ -9,6 +9,11 @@ local function cli_path()
   return vim.fs.joinpath(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)), 'cli.lua')
 end
 
+--- The awk filter that draws the branches of a threaded search (`search --tree`).
+local function tree_awk()
+  return vim.fs.joinpath(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)), 'tree.awk')
+end
+
 --- The shell command that completes the query `{q}` of fzf with a picker on the terminal, printing the new query.
 --- A source whose backend has its own picker (`pick = true`) uses it; the others use the generic one of liveq.
 function M.pick_command(source)
@@ -208,6 +213,30 @@ function M.search(source, query)
     fzf_keymap['focus'] = 'change-preview-window(+1)+change-preview-label()'
     table.insert(header, 'alt-n/p match')
   end
+  -- a source with `tree` shows its items threaded (mail: the messages of each thread; Jira: subtasks under their
+  -- parent) when alt-t is on: `search --tree`, whose rows tree.awk draws branches for; the state lives in a file that
+  -- the search command tests, like the preview toggles
+  local tree_flag, tree_filter = '', ''
+  if source.tree then
+    source.tree_state = source.tree_state or vim.fn.tempname()
+    local state = source.tree_state
+    tree_flag = (' $([ -e %s ] && printf %%s --tree)'):format(vim.fn.shellescape(state))
+    tree_filter = ' | awk -f ' .. vim.fn.shellescape(tree_awk())
+    fzf_actions['alt-t'] = {
+      fn = function()
+        if vim.uv.fs_stat(state) then
+          os.remove(state)
+        else
+          local f = io.open(state, 'w')
+          if f then
+            f:close()
+          end
+        end
+      end,
+      reload = true,
+    }
+    table.insert(header, 'alt-t tree')
+  end
   vim.list_extend(header, { '^e edit' })
   if source.saved then
     vim.list_extend(header, { '^r saved', '^s save' })
@@ -218,7 +247,8 @@ function M.search(source, query)
   source.query_state = source.query_state or vim.fn.tempname()
   M.last_source = source
   local record = ('printf %%s <query> > %s; '):format(vim.fn.shellescape(source.query_state))
-  fzf.fzf_live(record .. ('sleep 0.3; %s search -f fzf -l %d -- <query>'):format(backend, source.limit or 100), {
+  local search_cmd = ('{ %s search -f fzf -l %d%s -- <query>; } 2>&1%s'):format(backend, source.limit or 100, tree_flag, tree_filter)
+  fzf.fzf_live(record .. 'sleep 0.3; ' .. search_cmd, {
     liveq_source = source.name, -- tells resume() that fzf-lua's last picker is this one
     prompt = source.prompt or (source.name .. '> '),
     query = query,

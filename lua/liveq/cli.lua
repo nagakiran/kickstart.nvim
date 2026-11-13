@@ -10,7 +10,8 @@
 --   nvim -l cli.lua scroll FILE                      sends `match first` to the fzf of $FZF_PORT (with curl)
 --
 -- FILE is the one a backend's `show --match` wrote ($LIVEQ_MATCH_FILE): the item's id, the index of the current match,
--- and the line numbers of the matches. `scroll` runs in the background after the preview is printed, since fzf only
+-- and the line numbers of the matches (one followed by `t` goes to the top of the preview, e.g. where the message of
+-- a row starts, instead of a third down). `scroll` runs in the background after the preview is printed, since fzf only
 -- applies a scroll offset given once the preview is complete; `match next/prev` are bound to keys of the picker.
 
 local here = debug.getinfo(1, 'S').source:sub(2)
@@ -152,7 +153,8 @@ local function match_action(how, file)
     f:write(id or '', '\n', index, '\n', numbers, '\n')
     f:close()
   end
-  return ('change-preview-window(+%d/3)+change-preview-label( match %d/%d )'):format(lines[index], index, #lines)
+  local line, top = lines[index]:match '^(%d+)(t?)$'
+  return ('change-preview-window(+%s%s)+change-preview-label( match %d/%d )'):format(line, top == 't' and '' or '/3', index, #lines)
 end
 
 local command = _G.arg[1]

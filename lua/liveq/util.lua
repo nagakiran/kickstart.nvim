@@ -43,12 +43,20 @@ function M.run(source, args, opts)
 end
 
 --- An item of a search: `id \t display \t url \t title`. Hint and error lines have no id; fzf-lua may strip the empty
---- field they start with, so the id is only trusted when it matches the source's `id_pattern`.
+--- field they start with, so the id is only trusted when it matches the source's `id_pattern` (a pattern, or a list
+--- of them when there are several kinds of items, e.g. the threads and the messages of a mailbox).
 function M.parse_line(source, line)
   local parts = vim.split(line, '\t', { plain = true })
   local id = parts[1] or ''
-  if source.id_pattern and not id:match(source.id_pattern) then
-    id = ''
+  local patterns = type(source.id_pattern) == 'table' and source.id_pattern or { source.id_pattern }
+  if source.id_pattern then
+    local ok = false
+    for _, pattern in ipairs(patterns) do
+      ok = ok or id:match(pattern) ~= nil
+    end
+    if not ok then
+      id = ''
+    end
   end
   return { id = id, url = parts[3] or '', title = parts[4] or '' }
 end

@@ -1,6 +1,6 @@
 -- The notmuch backend of liveq, run with `nvim -l` (no plugins, no user config):
 --
---   nvim -l notmuch.lua search -f fzf -l LIMIT -- QUERY
+--   nvim -l notmuch.lua search -f fzf -l LIMIT [--tree] -- QUERY    --tree: a row per message, threaded (5th field: depth)
 --   nvim -l notmuch.lua show [--plain] [--fold] [--match QUERY] -- thread:ID
 --   nvim -l notmuch.lua terms -- QUERY                       the words of QUERY to highlight, as JSON: [["word"], ["a", "phrase"]]
 --   nvim -l notmuch.lua complete -f json [-c CURSOR] -- QUERY
@@ -10,7 +10,7 @@
 --   nvim -l notmuch.lua save [--label NAME] -- QUERY         adds a named query; usable as `query:NAME` anywhere
 --   nvim -l notmuch.lua tag -- '+a -b' thread:ID...          changes the tags of threads
 --
--- Items are threads. The mailbox is the one notmuch is configured for, so a source picks it with $NOTMUCH_CONFIG.
+-- Items are threads (`thread:ID`), or messages (`id:MESSAGE-ID`) in the threaded view of `search --tree`. The mailbox is the one notmuch is configured for, so a source picks it with $NOTMUCH_CONFIG.
 -- See ../README.md for the contract.
 
 local PREFIXES = {
@@ -35,6 +35,7 @@ local MIMETYPES = { 'application/pdf', 'text/calendar', 'image/png', 'image/jpeg
 local MAX_CANDIDATES = 200
 
 local collected -- when set, out() keeps the lines here instead of printing them (show --match highlights them first)
+local target -- with collected: the lines { start, finish } of the message of an `id:` item, found by show()
 
 local function out(text)
   if collected then
@@ -83,7 +84,7 @@ local function parse(args)
     if a == '--' then
       vim.list_extend(rest, vim.list_slice(args, i + 1))
       break
-    elseif a == '--plain' or a == '--fold' then
+    elseif a == '--plain' or a == '--fold' or a == '--tree' then
       opts[a:sub(3)] = true
       i = i + 1
     elseif a:match '^%-' and args[i + 1] then
@@ -108,6 +109,19 @@ end
 
 local function is_thread(id)
   return id and id:match '^thread:%x+$' ~= nil
+end
+
+--- A thread (`thread:ID`) or a message (`id:MESSAGE-ID`, the rows of the threaded view).
+local function is_item(id)
+  return is_thread(id) or (id and id:match '^id:%S' ~= nil)
+end
+
+--- The notmuch query of an item: a message id is quoted, since it may contain characters of the query syntax.
+local function item_query(id)
+  if is_thread(id) then
+    return id
+  end
+  return 'id:"' .. id:sub(4):gsub('"', '""') .. '"'
 end
 
 -- -- search -------------------------------------------------------------------------------------------------------
@@ -143,6 +157,8 @@ local function live_query(query)
   end
   return ('%s%s(%s%s or %s%s*)'):format(before, open, prefix, term, prefix, term)
 end
+
+local search_tree -- the threaded view of search, defined below
 
 -- -- matches of a query -----------------------------------------------------------------------------------------
 
@@ -280,7 +296,10 @@ end
 --- first, and the line numbers separated by spaces. The one shown first is the first line with the term that is the
 --- rarest in the thread, below the subject: a common term (e.g. a word of the subject) is in every message, so the
 --- rarest one is closer to why the thread matched.
-local function print_highlighted(lines, query, id)
+---
+--- `range`: the lines of the message of an `id:` item (a row of the threaded view); its first line is shown first,
+--- at the top of the preview (a number with a `t` after it), and the matches follow.
+local function print_highlighted(lines, query, id, range)
   local patterns = term_patterns(query)
   local text = vim.split(table.concat(lines, '\n'), '\n', { plain = true })
   local matches, found_in = {}, {}
@@ -307,10 +326,18 @@ local function print_highlighted(lines, query, id)
     end
   end
   local first = matches[1] and 1 or 0
-  for i, n in ipairs(matches) do
-    if n > 1 and found_in[i][rarest] then
-      first = i
-      break
+  if range then
+    first = 1
+    while matches[first] and matches[first] < range[1] do
+      first = first + 1
+    end
+    table.insert(matches, first, range[1] .. 't')
+  else
+    for i, n in ipairs(matches) do
+      if n > 1 and found_in[i][rarest] then
+        first = i
+        break
+      end
     end
   end
   local file = os.getenv 'LIVEQ_MATCH_FILE'
@@ -320,6 +347,93 @@ local function print_highlighted(lines, query, id)
       f:write(id, '\n', first, '\n', table.concat(matches, ' '), '\n')
       f:close()
     end
+  end
+end
+
+--- The subject without its Re:/Fw: prefixes, to tell whether a reply changed it.
+local function base_subject(subject)
+  subject = vim.trim(subject or ''):lower()
+  while true do
+    local prefix, rest = subject:match '^(%a+)%s*%[?%d*%]?:%s*(.*)$'
+    if not prefix or not (prefix == 're' or prefix == 'fw' or prefix == 'fwd' or prefix == 'aw') then
+      return subject
+    end
+    subject = rest
+  end
+end
+
+--- The name of a From header ("Shelat, Ritesh" of `"Shelat, Ritesh" <ritesh@…>`), else its address.
+local function sender_name(from)
+  from = from or ''
+  local name = from:match '^%s*"?(.-)"?%s*<'
+  return (name and name ~= '') and name or (from:gsub('[<>]', ''))
+end
+
+--- The threaded view, like mutt's: a row per message of the threads (newest thread first), in reply order, with the
+--- depth in the 5th field and \31 where liveq's tree.awk draws the branches. A reply's subject is only shown when it
+--- changed. Messages that match the query are shown normally and the others dimmed, unread ones in bold. Tags that
+--- every message has (e.g. the mailbox's) are left out.
+search_tree = function(query, threads)
+  local ids = vim.tbl_map(function(t)
+    return 'thread:' .. t.thread
+  end, threads)
+  -- `match` is set on the messages that match the query; --entire-thread adds the others of their threads
+  local forest, err = json {
+    'show',
+    '--format=json',
+    '--body=false',
+    '--entire-thread=true',
+    '--sort=newest-first',
+    ('(%s) and (%s)'):format(table.concat(ids, ' or '), query),
+  }
+  if not forest then
+    out('\t\27[31m' .. tostring(err):gsub('\n', ' ') .. '\27[0m\t\t')
+    return
+  end
+  local rows = {}
+  local function walk(nodes, depth, parent_subject)
+    for _, node in ipairs(nodes or {}) do
+      local m, replies = node[1], node[2]
+      local subject = m and (m.headers or {}).Subject or ''
+      if m then
+        local changed = depth == 0 or base_subject(subject) ~= parent_subject
+        table.insert(rows, { m = m, depth = depth, subject = changed and subject or '' })
+      end
+      walk(replies, depth + 1, base_subject(subject))
+    end
+  end
+  for _, thread in ipairs(forest) do
+    walk(thread, 0, nil)
+  end
+  local common -- the tags of every message
+  for _, row in ipairs(rows) do
+    local set = {}
+    for _, tag in ipairs(row.m.tags or {}) do
+      if not common or common[tag] then
+        set[tag] = true
+      end
+    end
+    common = set
+  end
+  common = common or {}
+  for _, row in ipairs(rows) do
+    local m = row.m
+    local tags = vim.tbl_filter(function(tag)
+      return tag ~= 'inbox' and tag ~= 'unread' and not common[tag]
+    end, m.tags or {})
+    local style = vim.tbl_contains(m.tags or {}, 'unread') and '\27[1m' or (m.match and '' or '\27[2m')
+    out(
+      ('id:%s\t%s%s \27[33m%s\27[39m \31%s \27[36m%s\27[0m\t\t%s\t%d'):format(
+        m.id,
+        style,
+        truncate(m.date_relative, 12),
+        truncate(sender_name((m.headers or {}).From), 22),
+        row.subject,
+        table.concat(tags, ' '),
+        ((m.headers or {}).Subject or ''):gsub('[\t\n]', ' '),
+        row.depth
+      )
+    )
   end
 end
 
@@ -346,6 +460,9 @@ local function search(opts, rest)
   end
   if #threads == 0 and fzf then
     out '\t\27[2mNo threads match the query\27[0m\t\t'
+  end
+  if opts.tree and fzf and #threads > 0 then
+    return search_tree(query, threads)
   end
   for _, t in ipairs(threads) do
     local id = 'thread:' .. t.thread
@@ -597,18 +714,21 @@ end
 --- the lines that have them written to $LIVEQ_MATCH_FILE (see print_highlighted).
 local function show(opts, rest)
   local id = rest[1]
-  if not is_thread(id) then
+  if not is_item(id) then
     return -- e.g. a hint line of fzf
   end
-  if opts.match and not opts.plain then
-    collected = {}
-    show({ fold = opts.fold }, rest)
+  -- with --match, or for a message in a buffer or float ($LIVEQ_MATCH_FILE tells liveq where the message starts), the
+  -- text is collected first, to find the matches and the message
+  local locate = opts.plain and not is_thread(id) and os.getenv 'LIVEQ_MATCH_FILE'
+  if not collected and ((opts.match and not opts.plain) or locate) then
+    collected, target = {}, {}
+    show({ fold = opts.fold, plain = opts.plain }, rest)
     local lines = collected
     collected = nil
-    print_highlighted(lines, opts.match, id)
+    print_highlighted(lines, not opts.plain and opts.match or '', id, target.start and { target.start, target.finish or math.huge })
     return
   end
-  local thread, err = json { 'show', '--format=json', '--entire-thread=true', '--include-html', id }
+  local thread, err = json { 'show', '--format=json', '--entire-thread=true', '--include-html', item_query(id) }
   if not thread then
     fail(err)
   end
@@ -632,8 +752,22 @@ local function show(opts, rest)
     end
   end
   out((plain and '# ' or '') .. bold .. (subject or (messages[1] and messages[1].headers or {}).Subject or '') .. reset)
+  -- the lines printed so far, to know where the message of an `id:` item is (show --match scrolls to it)
+  local function printed()
+    local n = 0
+    for _, text in ipairs(collected or {}) do
+      n = n + select(2, text:gsub('\n', '')) + 1
+    end
+    return n
+  end
   for i, m in ipairs(messages) do
     local h = m.headers or {}
+    if collected and target and target.start and not target.finish then
+      target.finish = printed()
+    end
+    if collected and target and m.match and not is_thread(id) and not target.start then
+      target.start = printed() + 1
+    end
     if not plain and #messages > 1 then
       local label = (' %d/%d '):format(m.liveq_index, #messages)
       out('\27[33m' .. string.rep('━', 2) .. label .. string.rep('━', width - 2 - #label) .. reset)
@@ -772,10 +906,10 @@ hr.part { border: 0; border-top: 1px dashed #ccc; }
 --- Writes the thread as an HTML page into a new temporary directory and prints the page's path.
 local function html(_, rest)
   local id = rest[1]
-  if not is_thread(id) then
-    fail('not a thread id: ' .. tostring(id))
+  if not is_item(id) then
+    fail('not a thread or message id: ' .. tostring(id))
   end
-  local thread, err = json { 'show', '--format=json', '--entire-thread=true', '--include-html', id }
+  local thread, err = json { 'show', '--format=json', '--entire-thread=true', '--include-html', item_query(id) }
   if not thread then
     fail(err)
   end
@@ -997,10 +1131,10 @@ end
 local function url(_, rest)
   local id = rest[1]
   local template = os.getenv 'LIVEQ_MAIL_URL'
-  if not is_thread(id) or not template or template == '' then
+  if not is_item(id) or not template or template == '' then
     return
   end
-  local first = lines_of(notmuch { 'search', '--output=messages', '--sort=oldest-first', '--limit=1', id })[1]
+  local first = is_thread(id) and lines_of(notmuch { 'search', '--output=messages', '--sort=oldest-first', '--limit=1', id })[1] or id
   if not first then
     fail('no message in ' .. id)
   end
@@ -1040,9 +1174,9 @@ end
 
 local function tag(_, rest)
   local changes = vim.split(rest[1] or '', '%s+', { trimempty = true })
-  local ids = vim.tbl_filter(is_thread, vim.list_slice(rest, 2))
+  local ids = vim.tbl_map(item_query, vim.tbl_filter(is_item, vim.list_slice(rest, 2)))
   if #changes == 0 or #ids == 0 then
-    fail "usage: tag -- '+add -remove' thread:ID..."
+    fail "usage: tag -- '+add -remove' thread:ID|id:MESSAGE-ID..."
   end
   local args = { 'tag' }
   vim.list_extend(args, changes)
