@@ -42,8 +42,11 @@ local TTL = tonumber(os.getenv 'LIVEQ_TEAMS_TTL') or 120
 local MAX_CHATS = tonumber(os.getenv 'LIVEQ_TEAMS_MAX') or 150
 local DAY = 24 * 3600
 local UNITS = { d = DAY, w = 7 * DAY, M = 30 * DAY, y = 365 * DAY }
-local TYPES = { ['1:1'] = 'oneOnOne', dm = 'oneOnOne', oneonone = 'oneOnOne', group = 'group', meeting = 'meeting' }
-local TYPE_TAG = { oneOnOne = '\27[32m1:1\27[0m', group = '\27[34mgrp\27[0m', meeting = '\27[35mmtg\27[0m' }
+local TYPES = { ['1:1'] = 'oneOnOne', dm = 'oneOnOne', oneonone = 'oneOnOne', group = 'group', meeting = 'meeting', self = 'self', notes = 'self' }
+local TYPE_TAG = { oneOnOne = '\27[32m1:1\27[0m', group = '\27[34mgrp\27[0m', meeting = '\27[35mmtg\27[0m', self = '\27[33myou\27[0m' }
+-- The self chat ("notes to self") is not in /me/chats and /chats/48:notes is refused ("not a ChatThread"), but its
+-- messages are readable at /chats/48:notes/messages: fetch() adds it to the list from its newest message.
+local SELF_CHAT = '48:notes'
 local SCRIPT = debug.getinfo(1, 'S').source:sub(2)
 local INDEX = CACHE .. '/index.json'
 local KEEP = tonumber(os.getenv 'LIVEQ_TEAMS_KEEP') -- nil: keep every message
@@ -399,6 +402,9 @@ local function chat_name(chat, my_id)
 end
 
 local function unread(chat, my_id)
+  if chat.id == SELF_CHAT then
+    return false -- only you write there
+  end
   local last = chat.preview and epoch(chat.preview.at)
   -- a call or membership event as the last item does not make a chat unread in Teams either
   if not last or chat.preview.event or (chat.preview.fromId and chat.preview.fromId == my_id) then
@@ -532,6 +538,31 @@ local function fetch()
       end
     end
     url = page['@odata.nextLink']
+  end
+
+  -- the self chat, placed by its last message among the others (newest activity first)
+  local notes = api('GET', '/chats/' .. SELF_CHAT .. '/messages?$top=1')
+  local top = notes and notes.value and notes.value[1]
+  if top then
+    local m = trim_message(top)
+    local self_chat = {
+      id = SELF_CHAT,
+      topic = 'Notes (you)',
+      chatType = 'self',
+      webUrl = 'https://teams.microsoft.com/l/chat/48:notes/0',
+      updated = m.at,
+      members = {},
+      preview = { id = m.id, at = m.at, from = m.from, fromId = m.fromId, text = one_line(m.text), event = m.type ~= 'message' or nil },
+    }
+    local at, pos = epoch(m.at) or 0, #chats + 1
+    for i, c in ipairs(chats) do
+      if (epoch(c.preview and c.preview.at or c.updated) or 0) < at then
+        pos = i
+        break
+      end
+    end
+    table.insert(chats, pos, self_chat)
+    seen_ids[SELF_CHAT] = true
   end
 
   -- chats beyond the newest MAX_CHATS stay, as they were last seen, so their messages remain searchable (a hidden
@@ -1217,6 +1248,9 @@ local function read(_, rest)
   if not id or not id:match '^%d+:' then
     fail 'read: no chat id'
   end
+  if id == SELF_CHAT then
+    return -- it has no read state (markChatReadForUser refuses it), and is never unread
+  end
   local my_id, tenant = me()
   if not my_id then
     fail 'read: no user id in the token'
@@ -1240,7 +1274,7 @@ end
 
 local PREFIXES = {
   { 'with:', "a member's name or address" },
-  { 'type:', '1:1, group or meeting' },
+  { 'type:', '1:1, group, meeting or self' },
   { 'is:unread', 'chats with unread messages' },
   { 'since:', 'last activity since: 1d, 7d, 2w, 1M or a date' },
 }
@@ -1292,7 +1326,7 @@ local function complete(opts, rest)
     end
   elseif key == 'type' or key == 'since' or key == 'is' then
     context = 'value'
-    local values = ({ type = { '1:1', 'group', 'meeting' }, since = { '1d', '7d', '2w', '1M', '3M' }, is = { 'unread' } })[key]
+    local values = ({ type = { '1:1', 'group', 'meeting', 'self' }, since = { '1d', '7d', '2w', '1M', '3M' }, is = { 'unread' } })[key]
     for _, v in ipairs(values) do
       if v:sub(1, #value) == value then
         add(sign .. key .. ':' .. v, 'value')
