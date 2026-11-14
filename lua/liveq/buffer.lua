@@ -30,9 +30,11 @@ function M.open(source, query)
     buffer = buf,
     desc = 'Search ' .. source.title .. ' with the saved query',
     callback = function()
+      -- read now: after :wq the buffer is wiped (bufhidden) before the scheduled search runs
+      local query = buffer_query(buf)
       vim.schedule(function()
         vim.cmd 'stopinsert'
-        require('liveq.picker').search(source, buffer_query(buf))
+        require('liveq.picker').search(source, query)
       end)
     end,
   })

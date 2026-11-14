@@ -17,7 +17,7 @@ require('liveq').setup_cmp(cmp)
 
 Commands: `:Liveq {source} [query]`, `:LiveqResume [source]` (also `<leader>lr`: reopens the last search with its query and results; one hidden with `alt-esc` comes back exactly as it was, cursor included), `:LiveqSaved {source}`, `:LiveqQuery {source} [query]`, `:LiveqShow {source} [id]`; a source may define its own names and keymaps (Jira: `:JiraSearch`, `:JiraSaved`, `:JiraJql`, `:JiraShow`, `<leader>js/jr/jq/ji/jo`).
 
-Keys in the picker: `tab` complete the query · `ctrl-space` select · `enter` insert the id(s) at the cursor · `alt-enter` insert "id - title" · `ctrl-o` browser · `ctrl-y` yank "id - title" · `ctrl-v` details float · `alt-b` open in a buffer (`liveq://SOURCE/ID`, reused when opened again) · `alt-n`/`alt-p` next/previous match of the query in the preview (sources with `match`) · `alt-t` threaded view (sources with `tree`) · `ctrl-e` edit the query in a buffer with completion (`<CR>` in normal mode or `:w` searches with it) · `ctrl-r`/`ctrl-s` saved queries · `ctrl-q` all results into a Markdown buffer; plus the source's own actions.
+Keys in the picker: `tab` complete the query · `ctrl-space` select · `enter` insert the id(s) at the cursor · `alt-enter` insert "id - title" · `ctrl-o` browser · `ctrl-y` yank "id - title" · `ctrl-v` details float · `alt-b` open in a buffer (`liveq://SOURCE/ID`, reused when opened again) · `alt-n`/`alt-p` next/previous match of the query in the preview (sources with `match`) · `alt-t` threaded view (sources with `tree`) · `alt-e` edit the query in a buffer with completion (`<CR>` in normal mode or `:w` searches with it) · `ctrl-r`/`ctrl-s` saved queries · `ctrl-q` all results into a Markdown buffer; plus the source's own actions.
 
 ## Backend contract
 

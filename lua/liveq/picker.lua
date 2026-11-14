@@ -142,8 +142,8 @@ function M.search(source, query)
       action.fn(util.items(source, selected), source, last_query(opts))
     end
   end
-  -- the actions on the query rather than on the items
-  fzf_actions['ctrl-e'] = function(_, opts)
+  -- the actions on the query rather than on the items; alt-e, since ctrl-e is fzf's end-of-line
+  fzf_actions['alt-e'] = function(_, opts)
     require('liveq.buffer').open(source, last_query(opts))
   end
   if source.saved then
@@ -237,7 +237,7 @@ function M.search(source, query)
     }
     table.insert(header, 'alt-t tree')
   end
-  vim.list_extend(header, { '^e edit' })
+  vim.list_extend(header, { 'alt-e edit' })
   if source.saved then
     vim.list_extend(header, { '^r saved', '^s save' })
   end
@@ -323,7 +323,7 @@ function M.saved(source)
           M.search(source, query_of(selected))
         end
       end,
-      ['ctrl-e'] = function(selected)
+      ['alt-e'] = function(selected)
         if query_of(selected) then
           require('liveq.buffer').open(source, query_of(selected))
         end
