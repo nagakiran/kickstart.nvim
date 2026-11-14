@@ -311,6 +311,10 @@ require('liveq').setup {
       commands = { search = 'BookmarkSearch', query = 'BookmarkQuery' },
       keymaps = { search = '<leader>lk' },
     },
+    teams = require 'liveq.sources.teams' {
+      commands = { search = 'TeamsChats', query = 'TeamsQuery', resume = 'TeamsResume' },
+      keymaps = { search = '<leader>ts', resume = '<leader>tr' },
+    },
   },
 }
 
