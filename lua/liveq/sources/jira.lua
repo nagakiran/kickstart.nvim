@@ -30,6 +30,18 @@ return {
   validate = true,
   url = true,
   tree = true, -- `search --tree`: alt-t shows the stories of an epic and the subtasks of a story under them
+  sort = true, -- `sort -f tsv`: alt-s sorts by a column shown (ORDER BY)
+  header_row = true, -- `search --header`: a first line with the headings of the columns
+  -- alt-c cycles through these sets of columns, shown between the key and the summary (`search --columns`; any of
+  -- type, status, assignee, reporter, priority, updated, created, due, resolved, resolution, labels, components,
+  -- parent, project, or the name or id of any Jira field, custom ones included: Fix-ETA, Sprint, "Story Points",
+  -- customfield_10109); the first one is the default
+  views = {
+    { name = 'default', args = { '--columns', 'type,status,assignee,updated' } },
+    { name = 'people', args = { '--columns', 'type,status,assignee,reporter,updated' } },
+    { name = 'planning', args = { '--columns', 'type,status,assignee,Fix-ETA,Dev Complete Date,Short Status' } },
+    { name = 'labels', args = { '--columns', 'type,status,labels,components' } },
+  },
 
   id_pattern = '^%a[%w_]*%-%d+$',
   cursor_id_pattern = '%u[%u%d]+%-%d+',

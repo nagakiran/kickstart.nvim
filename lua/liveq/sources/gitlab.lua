@@ -45,6 +45,7 @@ return function(opts)
 
     saved = true,
     url = true,
+    sort = true, -- `sort -f tsv`: alt-s picks a `sort:` term
 
     id_pattern = '^[%w._/-]+!%d+$',
     -- `!123` (in the default project) or `group/project!123`

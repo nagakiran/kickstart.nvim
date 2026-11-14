@@ -237,6 +237,63 @@ function M.search(source, query)
     }
     table.insert(header, 'alt-t tree')
   end
+  -- a source with `views` (e.g. Jira: which columns the rows show) cycles through them with alt-c: each view is a
+  -- list of arguments of `search`, written to a file that the search command reads; the prompt names the view
+  local view_set, view_args, prompt = '', '', source.prompt or (source.name .. '> ')
+  if source.views and #source.views > 0 then
+    source.view_index = source.view_index or 1
+    source.view_state = source.view_state or vim.fn.tempname()
+    local args_file, prompt_file = source.view_state, source.view_state .. '.prompt'
+    local function write(path, text)
+      local f = io.open(path, 'w')
+      if f then
+        f:write(text)
+        f:close()
+      end
+    end
+    local function prompt_of(index)
+      local name = source.views[index].name
+      if index == 1 then
+        return prompt
+      end
+      -- `jql> ` becomes `jql [people]> `
+      local head, tail = prompt:match '^(.-)(>?%s*)$'
+      return ('%s [%s]%s'):format(head, name, tail)
+    end
+    local function apply(index)
+      source.view_index = index
+      -- quoted for the shell, which reads them back with `eval "set -- ..."`, so they can have spaces (`Story Points`)
+      write(args_file, table.concat(vim.tbl_map(vim.fn.shellescape, source.views[index].args or {}), ' '))
+      write(prompt_file, prompt_of(index))
+    end
+    apply(source.view_index)
+    prompt = prompt_of(source.view_index)
+    view_set = ('eval "set -- $(cat %s 2>/dev/null)"; '):format(vim.fn.shellescape(args_file))
+    view_args = ' "$@"'
+    fzf_actions['alt-c'] = {
+      fn = function()
+        apply(source.view_index % #source.views + 1)
+      end,
+      reload = true,
+      postfix = ('transform-prompt(cat %s)'):format(vim.fn.shellescape(prompt_file)),
+    }
+    table.insert(header, 'alt-c columns')
+  end
+  -- a source with `sort` lists ways to sort its results (`sort -f tsv`: label, then the query with its sort replaced);
+  -- alt-s picks one on the terminal and it becomes the query, so the server sorts, and saved queries keep the order
+  if source.sort then
+    local sort_tmp = vim.fn.tempname()
+    local sort_cmd = ('%s -l %s sort --cmd %s%s -- {q}'):format(
+      vim.fn.shellescape(vim.v.progpath),
+      vim.fn.shellescape(cli_path()),
+      vim.fn.shellescape(backend),
+      source.view_state and (' --args-file ' .. vim.fn.shellescape(source.view_state)) or ''
+    )
+    fzf_keymap['alt-s'] = ('execute(%s > %s || printf %%s {q} > %s)+transform-query(cat %s)'):format(sort_cmd, sort_tmp, sort_tmp, sort_tmp)
+    table.insert(header, 'alt-s sort')
+  end
+  -- a source with `header_row` prints a line of column headings first (`search --header`), which fzf keeps on top
+  local header_flag = source.header_row and ' --header' or ''
   vim.list_extend(header, { 'alt-e edit' })
   if source.saved then
     vim.list_extend(header, { '^r saved', '^s save' })
@@ -247,10 +304,18 @@ function M.search(source, query)
   source.query_state = source.query_state or vim.fn.tempname()
   M.last_source = source
   local record = ('printf %%s <query> > %s; '):format(vim.fn.shellescape(source.query_state))
-  local search_cmd = ('{ %s search -f fzf -l %d%s -- <query>; } 2>&1%s'):format(backend, source.limit or 100, tree_flag, tree_filter)
+  local search_cmd = ('{ %s%s search -f fzf -l %d%s%s%s -- <query>; } 2>&1%s'):format(
+    view_set,
+    backend,
+    source.limit or 100,
+    tree_flag,
+    header_flag,
+    view_args,
+    tree_filter
+  )
   fzf.fzf_live(record .. 'sleep 0.3; ' .. search_cmd, {
     liveq_source = source.name, -- tells resume() that fzf-lua's last picker is this one
-    prompt = source.prompt or (source.name .. '> '),
+    prompt = prompt,
     query = query,
     search = query,
     exec_empty_query = true,
@@ -264,6 +329,7 @@ function M.search(source, query)
       ['--with-nth'] = '2',
       ['--multi'] = true,
       ['--header'] = table.concat(header, ' · '),
+      ['--header-lines'] = source.header_row and 1 or nil,
     },
     actions = fzf_actions,
   })

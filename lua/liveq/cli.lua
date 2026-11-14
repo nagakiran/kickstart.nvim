@@ -7,6 +7,7 @@
 -- (shell) and of the fzf-lua picker. Exits with status 1, printing nothing, when nothing was picked.
 --
 --   nvim -l cli.lua lines --cmd '<backend>' --start S --end E -- QUERY TERM   candidates for fzf's reload (internal)
+--   nvim -l cli.lua sort --cmd '<backend>' [--args-file FILE] -- QUERY        picks a sort, prints the new query
 --   nvim -l cli.lua match {first|next|prev} FILE     prints the fzf action that scrolls the preview to a match
 --   nvim -l cli.lua scroll FILE                      sends `match first` to the fzf of $FZF_PORT (with curl)
 --
@@ -36,7 +37,7 @@ local function parse(args)
     if a == '--' then
       vim.list_extend(rest, vim.list_slice(args, i + 1))
       break
-    elseif a == '--cmd' or a == '--cursor' or a == '--start' or a == '--end' then
+    elseif a == '--cmd' or a == '--cursor' or a == '--start' or a == '--end' or a == '--args-file' then
       opts[a:sub(3)] = args[i + 1]
       i = i + 2
     else
@@ -175,6 +176,53 @@ local function pick(opts, rest)
   io.stdout:write(new_text .. '\n')
 end
 
+--- `sort`: picks one of the ways to sort the results of QUERY that the backend's `sort -f tsv` prints (a line per
+--- choice: label, then QUERY with its sort replaced; the current one marked `●`) and prints its query. ARGS-FILE has
+--- the arguments of the current view, quoted for the shell (e.g. Jira's `--columns`), which the backend takes too.
+local function sort(opts, rest)
+  local backend = opts.cmd or fail '--cmd is required'
+  local query = rest[1] or ''
+  local args = opts['args-file'] and ('eval "set -- $(cat %s 2>/dev/null)"; '):format(vim.fn.shellescape(opts['args-file'])) or ''
+  local cmd = ('%s%s sort -f tsv %s-- %s'):format(args, backend, args ~= '' and '"$@" ' or '', vim.fn.shellescape(query))
+  local result = vim.system({ 'sh', '-c', cmd }, { text = true }):wait(30000)
+  if result.code ~= 0 then
+    fail(vim.trim(result.stderr or ''))
+  end
+  local choices = vim.split(vim.trim(result.stdout or ''), '\n', { trimempty = true })
+  if #choices == 0 then
+    fail 'no way to sort these results'
+  end
+  local start = 1
+  for i, line in ipairs(choices) do
+    if line:match '^●' then
+      start = i
+    end
+  end
+  local fzf_cmd = {
+    'fzf',
+    '--delimiter=\t',
+    '--with-nth=1',
+    '--height=40%',
+    '--reverse',
+    '--no-multi',
+    '--prompt=sort> ',
+    -- the cursor starts on the current order
+    '--bind=load:pos('
+      .. start
+      .. ')',
+  }
+  local extra = os.getenv 'LIVEQ_FZF_OPTS'
+  if extra and extra ~= '' then
+    vim.list_extend(fzf_cmd, vim.split(extra, '%s+', { trimempty = true }))
+  end
+  local picked = vim.system(fzf_cmd, { stdin = table.concat(choices, '\n'), text = true }):wait()
+  local new_query = vim.split(picked.stdout or '', '\t', { plain = true })[2]
+  if picked.code ~= 0 or not new_query then
+    fail()
+  end
+  io.stdout:write(vim.trim(new_query) .. '\n')
+end
+
 --- The fzf action that shows the current match of FILE (after moving to the next or previous one, cyclically) a third
 --- down the preview, with "match i/n" as the preview's label; the top of the preview when there is none.
 local function match_action(how, file)
@@ -209,6 +257,8 @@ if command == 'pick' then
   pick(opts, rest)
 elseif command == 'lines' then
   lines(opts, rest)
+elseif command == 'sort' then
+  sort(opts, rest)
 elseif command == 'match' then
   io.stdout:write(match_action(rest[1], rest[2]))
 elseif command == 'scroll' then
@@ -217,5 +267,5 @@ elseif command == 'scroll' then
     vim.system({ 'curl', '-s', '-m', '2', '-XPOST', 'localhost:' .. port, '-d', match_action('first', rest[1]) }):wait()
   end
 else
-  fail('unknown command: ' .. tostring(command) .. ' (expected: pick, lines, match, scroll)')
+  fail('unknown command: ' .. tostring(command) .. ' (expected: pick, lines, sort, match, scroll)')
 end

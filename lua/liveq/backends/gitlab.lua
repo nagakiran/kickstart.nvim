@@ -6,6 +6,7 @@
 --   nvim -l gitlab.lua complete -f json [-c CURSOR] -- QUERY
 --   nvim -l gitlab.lua url -- PROJECT!IID
 --   nvim -l gitlab.lua saved -f tsv / save [--label NAME] -- QUERY
+--   nvim -l gitlab.lua sort -f tsv -- QUERY                     the ways to sort (alt-s in liveq)
 --
 -- The query language mirrors the search bar of GitLab:
 --   state:opened|merged|closed|locked|all (default opened)   author:@me   assignee:NAME   reviewer:NAME
@@ -629,7 +630,28 @@ local function save(opts, rest)
   io.stderr:write('Saved: ' .. label .. '\n')
 end
 
-local commands = { search = search, show = show, complete = complete, url = url, saved = saved, save = save }
+-- -- sort ---------------------------------------------------------------------------------------------------------
+
+local SORTS = {
+  { 'updated', 'updated ↓ newest first' },
+  { 'updated_asc', 'updated ↑ oldest first' },
+  { 'created', 'created ↓ newest first' },
+  { 'created_asc', 'created ↑ oldest first' },
+}
+
+--- The ways to sort the results of QUERY (liveq's `sort -f tsv`): a line per choice, its label and QUERY with its
+--- `sort:` term replaced; the current one marked with ●, the default (updated) when there is no `sort:` term.
+local function sort(_, rest)
+  local query = rest[1] or ''
+  local current = query:match '%f[%S]sort:(%S+)' or 'updated'
+  local without = vim.trim((query:gsub('%f[%S]sort:%S+', ''):gsub('%s+', ' ')))
+  for _, s in ipairs(SORTS) do
+    local new = s[1] == 'updated' and without or vim.trim(without .. ' sort:' .. s[1])
+    out(('%s %s\t%s'):format(s[1] == current and '●' or ' ', s[2], new))
+  end
+end
+
+local commands = { search = search, show = show, complete = complete, url = url, saved = saved, save = save, sort = sort }
 local command = _G.arg[1]
 if not commands[command] then
   fail('unknown command: ' .. tostring(command) .. ' (expected: ' .. table.concat(vim.tbl_keys(commands), ', ') .. ')', 2)
