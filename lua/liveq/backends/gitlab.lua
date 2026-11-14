@@ -518,7 +518,7 @@ local function values_for(key, typed, project)
       return { v }
     end, matching(milestones, typed))
   elseif key == 'branch' or key == 'target' then
-    local branches = api(('projects/%s/repository/branches?per_page=50&search=%s'):format(p, encode(typed))) or {}
+    local branches = api(('projects/%s/repository/branches?per_page=100&sort=updated_desc&search=%s'):format(p, encode(typed))) or {}
     return vim.tbl_map(function(b)
       return { b.name }
     end, branches)

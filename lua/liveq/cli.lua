@@ -6,6 +6,7 @@
 -- `complete -f json` command, so a source does not have to implement a picker of its own; used by the TAB of `lq`
 -- (shell) and of the fzf-lua picker. Exits with status 1, printing nothing, when nothing was picked.
 --
+--   nvim -l cli.lua lines --cmd '<backend>' --start S --end E -- QUERY TERM   candidates for fzf's reload (internal)
 --   nvim -l cli.lua match {first|next|prev} FILE     prints the fzf action that scrolls the preview to a match
 --   nvim -l cli.lua scroll FILE                      sends `match first` to the fzf of $FZF_PORT (with curl)
 --
@@ -35,7 +36,7 @@ local function parse(args)
     if a == '--' then
       vim.list_extend(rest, vim.list_slice(args, i + 1))
       break
-    elseif a == '--cmd' or a == '--cursor' then
+    elseif a == '--cmd' or a == '--cursor' or a == '--start' or a == '--end' then
       opts[a:sub(3)] = args[i + 1]
       i = i + 2
     else
@@ -51,36 +52,73 @@ local function pad(s, width)
   return n >= width and s or (s .. string.rep(' ', width - n))
 end
 
-local function pick(opts, rest)
-  local backend = opts.cmd or fail '--cmd is required'
-  local query = rest[1] or ''
-  local cursor = tonumber(opts.cursor)
-  local complete_cmd = ('%s complete -f json %s-- %s'):format(backend, cursor and ('-c ' .. cursor .. ' ') or '', vim.fn.shellescape(query))
+--- Runs the backend's `complete -f json` on TEXT (cursor at CURSOR, the end when nil); nil and a message on failure.
+local function complete(backend, text, cursor)
+  local complete_cmd = ('%s complete -f json %s-- %s'):format(backend, cursor and ('-c ' .. cursor .. ' ') or '', vim.fn.shellescape(text))
   local result = vim.system({ 'sh', '-c', complete_cmd }, { text = true }):wait(30000)
   if result.code ~= 0 then
-    fail(vim.trim(result.stderr or ''))
+    return nil, vim.trim(result.stderr or '')
   end
   local ok, data = pcall(vim.json.decode, result.stdout or '')
   if not ok or type(data) ~= 'table' then
-    fail 'invalid output of the complete command'
+    return nil, 'invalid output of the complete command'
   end
-  local candidates = data.candidates or {}
-  if #candidates == 0 then
-    fail()
-  end
+  data.candidates = data.candidates or {}
+  return data
+end
 
+--- The lines given to fzf: `insert<TAB>cursor_offset<TAB>display<TAB>detail`, of which fzf shows only the last two.
+local function fzf_lines(candidates)
   local width = 0
   for _, c in ipairs(candidates) do
     width = math.min(math.max(width, vim.fn.strchars(c.display)), 40)
   end
   local lines = {}
   for _, c in ipairs(candidates) do
-    table.insert(lines, ('%s\t\27[2m%s\27[0m'):format(pad(c.display, width), vim.trim((c.kind or '') .. ' ' .. (c.detail or ''))))
+    local detail = vim.trim((c.kind or '') .. ' ' .. (c.detail or ''))
+    local insert = (c.insert or c.display):gsub('[\t\n]', ' ')
+    table.insert(lines, ('%s\t%s\t%s\t\27[2m%s\27[0m'):format(insert, c.cursor_offset or '', pad(c.display, width), detail))
   end
+  return lines
+end
+
+--- The text of QUERY with its characters START..FINISH replaced by TERM, and the position at the end of TERM.
+local function with_term(query, start, finish, term)
+  local before = vim.fn.strcharpart(query, 0, start)
+  return before .. term .. vim.fn.strcharpart(query, finish), start + vim.fn.strchars(term)
+end
+
+--- `lines`: the candidates for QUERY with its characters START..END replaced by TERM, as lines for fzf. It is the
+--- reload command of the picker of values, so that they are asked for again as the term is edited in fzf (a backend
+--- returns only the first page of what matches, so filtering that page in fzf misses the rest).
+local function lines(opts, rest)
+  local backend = opts.cmd or fail '--cmd is required'
+  local text, cursor = with_term(rest[1] or '', tonumber(opts.start) or 0, tonumber(opts['end']) or 0, rest[2] or '')
+  local data = complete(backend, text, cursor)
+  if data then
+    io.stdout:write(table.concat(fzf_lines(data.candidates), '\n'), '\n')
+  end
+end
+
+local function pick(opts, rest)
+  local backend = opts.cmd or fail '--cmd is required'
+  local query = rest[1] or ''
+  local cursor = tonumber(opts.cursor)
+  local data, err = complete(backend, query, cursor)
+  if not data then
+    fail(err)
+  end
+  local is_value = data.context == 'value'
+  local candidates = data.candidates
+  if #candidates == 0 and not is_value then
+    fail()
+  end
+
   local fzf_cmd = {
     'fzf',
     '--ansi',
     '--delimiter=\t',
+    '--with-nth=3..',
     '--nth=1,2',
     '--height=40%',
     '--reverse',
@@ -88,7 +126,20 @@ local function pick(opts, rest)
     '--print-query',
     '--prompt=' .. (data.context or 'pick') .. '> ',
   }
-  if data.context ~= 'value' then
+  if is_value then
+    -- the query of fzf is the whole term (e.g. `target:feat`), and each edit asks the backend again for that term
+    local start, finish = data.replace_start or 0, data.replace_end or 0
+    local term = vim.fn.strcharpart(query, start, finish - start)
+    local reload = ('%s -l %s lines --cmd %s --start %d --end %d -- %s {q}'):format(
+      vim.fn.shellescape(vim.v.progpath),
+      vim.fn.shellescape(here),
+      vim.fn.shellescape(backend),
+      start,
+      finish,
+      vim.fn.shellescape(query)
+    )
+    vim.list_extend(fzf_cmd, { '--disabled', '--query=' .. term, '--bind=change:reload:' .. reload })
+  else
     vim.list_extend(fzf_cmd, { '--select-1', '--exit-0' })
   end
   local extra = os.getenv 'LIVEQ_FZF_OPTS'
@@ -96,7 +147,7 @@ local function pick(opts, rest)
     vim.list_extend(fzf_cmd, vim.split(extra, '%s+', { trimempty = true }))
   end
   -- fzf draws on /dev/tty by itself; its stdin is the list and its stdout the choice
-  local picked = vim.system(fzf_cmd, { stdin = table.concat(lines, '\n'), text = true }):wait()
+  local picked = vim.system(fzf_cmd, { stdin = table.concat(fzf_lines(candidates), '\n'), text = true }):wait()
   if picked.code ~= 0 and picked.code ~= 1 then
     fail()
   end
@@ -105,18 +156,13 @@ local function pick(opts, rest)
 
   local insert, cursor_offset
   if vim.trim(selection) ~= '' then
-    local display = vim.trim(vim.split(selection, '\t', { plain = true })[1])
-    for _, c in ipairs(candidates) do
-      if c.display == display then
-        insert, cursor_offset = c.insert, c.cursor_offset
-        break
-      end
-    end
-  elseif data.context == 'value' and typed ~= '' then
-    -- a value that the backend does not suggest is taken as typed
+    local fields = vim.split(selection, '\t', { plain = true })
+    insert, cursor_offset = fields[1], tonumber(fields[2] or '')
+  elseif is_value and typed ~= '' then
+    -- a value that the backend does not suggest is taken as typed (the query of fzf is the whole term)
     insert, cursor_offset = typed, vim.fn.strchars(typed)
   end
-  if not insert then
+  if not insert or insert == '' then
     fail()
   end
 
@@ -161,6 +207,8 @@ local command = _G.arg[1]
 local opts, rest = parse(vim.list_slice(_G.arg, 2))
 if command == 'pick' then
   pick(opts, rest)
+elseif command == 'lines' then
+  lines(opts, rest)
 elseif command == 'match' then
   io.stdout:write(match_action(rest[1], rest[2]))
 elseif command == 'scroll' then
@@ -169,5 +217,5 @@ elseif command == 'scroll' then
     vim.system({ 'curl', '-s', '-m', '2', '-XPOST', 'localhost:' .. port, '-d', match_action('first', rest[1]) }):wait()
   end
 else
-  fail('unknown command: ' .. tostring(command) .. ' (expected: pick, match, scroll)')
+  fail('unknown command: ' .. tostring(command) .. ' (expected: pick, lines, match, scroll)')
 end

@@ -35,7 +35,7 @@ Optional subcommands (declared by the source, see below):
 |---|---|
 | `url -- ID` | Opening the item under the cursor in the browser (`gx` in the float, `open` keymap). |
 | `saved -f tsv` / `save [--label L] -- QUERY` | Saved queries: `label \t query \t key \t origin` lines; `save` prompts for the label when it is not given. |
-| `pick [--shell] [-c CURSOR] -- TEXT` | A picker of the backend's own (e.g. one that reloads values from the server as you type). Without it, liveq's generic picker (`cli.lua`) is used, which only needs `complete`. |
+| `pick [--shell] [-c CURSOR] -- TEXT` | A picker of the backend's own (e.g. one that reloads values from the server as you type). Without it, liveq's generic picker (`cli.lua`) is used, which only needs `complete`; for a `value` context its query is the whole term (e.g. `target:feat`) and each edit runs `complete` again for it, since a backend returns only the first page of what matches. |
 | `edit -- QUERY` | Editing the query in `$EDITOR` from the shell, e.g. one clause per line. Without it, the query is edited as a single line. |
 | `validate -- QUERY` | `<localleader>v` in the query buffer. |
 | `search -f fzf -l LIMIT --tree -- QUERY` | The threaded view (`tree = true`), toggled with `alt-t`: rows in tree order (a node, then its children), each with its depth as a 5th field (`id \t display \t url \t title \t depth`, roots at 0) and `\037` in `display` where the branches go (else they go before it). liveq's `tree.awk` draws the branches (`├─>`, `└─>`, `│`) from the depths, so a backend only orders its rows: mail threads, Jira subtasks under their parent or stories under their epic, and so on. Rows without a depth (hints, errors) pass through. |
