@@ -722,13 +722,25 @@ local function show(opts, rest)
   local locate = opts.plain and not is_thread(id) and os.getenv 'LIVEQ_MATCH_FILE'
   if not collected and ((opts.match and not opts.plain) or locate) then
     collected, target = {}, {}
-    show({ fold = opts.fold, plain = opts.plain }, rest)
+    show({ fold = opts.fold, plain = opts.plain, match = opts.match }, rest)
     local lines = collected
     collected = nil
     print_highlighted(lines, not opts.plain and opts.match or '', id, target.start and { target.start, target.finish or math.huge })
     return
   end
-  local thread, err = json { 'show', '--format=json', '--entire-thread=true', '--include-html', item_query(id) }
+  -- a thread shown with the picker's query: notmuch marks the messages that match it (`match`), so that the preview
+  -- starts at the newest of them (e.g. the message of `folder:"Sent Items"`, not the reply above it)
+  local thread, err
+  local query = is_thread(id) and not opts.plain and vim.trim(live_query(opts.match or ''))
+  if query and query ~= '' then
+    thread = json { 'show', '--format=json', '--entire-thread=true', '--include-html', ('%s and (%s)'):format(id, query) }
+    if thread and #thread == 0 then
+      thread = nil -- the thread no longer matches
+    end
+  end
+  if not thread then
+    thread, err = json { 'show', '--format=json', '--entire-thread=true', '--include-html', item_query(id) }
+  end
   if not thread then
     fail(err)
   end
@@ -738,6 +750,15 @@ local function show(opts, rest)
     bold, dim, reset = '', '', ''
   end
   local messages = thread_messages(thread)
+  -- whether only some of the messages of a thread match the query: the preview then starts at the newest that does
+  local narrowed = false
+  if is_thread(id) then
+    local some, all = false, true
+    for _, m in ipairs(messages) do
+      some, all = some or m.match == true, all and m.match == true
+    end
+    narrowed = some and not all
+  end
   local width = text_width()
   -- start rendering every message (w3m runs in parallel) before printing the first
   local bodies = {}
@@ -765,7 +786,7 @@ local function show(opts, rest)
     if collected and target and target.start and not target.finish then
       target.finish = printed()
     end
-    if collected and target and m.match and not is_thread(id) and not target.start then
+    if collected and target and m.match and (narrowed or not is_thread(id)) and not target.start then
       target.start = printed() + 1
     end
     if not plain and #messages > 1 then
