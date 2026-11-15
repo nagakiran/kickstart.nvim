@@ -13,7 +13,9 @@
 --
 -- The query, evaluated locally over the cache:
 --   words (each must be in the chat's name, members or messages; -word excludes, on name/members/last message only)
---   with:NAME (a member's name or address)   type:1:1|group|meeting   is:unread   since:7d|2w|1M|2026-11-01
+--   with:NAME (a member's name or address)   type:1:1|group|meeting   is:unread   since:7d|2w|1M|2026-11-01 (last activity)
+--   on:DATE (a message that local day: 2026-11-05, 11-05, today, yesterday, 3d = three days ago; on:11-03..11-05 a range;
+--   with words, a message of those days must have the words not found in the name/members/last message)
 --
 -- Searching never waits for the network once there is a cache: when the cache is older than LIVEQ_TEAMS_TTL seconds
 -- (default 120) a refresh is started in the background and the next keystroke sees its result. The messages of a chat
@@ -161,6 +163,34 @@ local function since(value)
     return os.time() - tonumber(n) * UNITS[unit]
   end
   return value:match '^%d%d%d%d%-%d%d%-%d%d$' and epoch(value .. 'T00:00:00') or nil
+end
+
+--- The local days [start, stop) of `on:`: a day (2026-11-05, 11-05 this year, today, yesterday, 3d ago) or A..B.
+local function day_range(value)
+  local function day(v)
+    local now = os.date '*t'
+    local y, m, d = v:match '^(%d%d%d%d)%-(%d%d?)%-(%d%d?)$'
+    if not y then
+      m, d = v:match '^(%d%d?)%-(%d%d?)$'
+      y = m and now.year
+    end
+    if not y then
+      local back = v == 'today' and 0 or v == 'yesterday' and 1 or tonumber(v:match '^(%d+)d$')
+      if not back then
+        return nil
+      end
+      y, m, d = now.year, now.month, now.day - back
+    end
+    y, m, d = tonumber(y), tonumber(m), tonumber(d)
+    return os.time { year = y, month = m, day = d, hour = 0 }, os.time { year = y, month = m, day = d + 1, hour = 0 }
+  end
+  local a, b = value:match '^(.-)%.%.(.+)$'
+  local start, stop = day(a or value)
+  if b then
+    local _, last = day(b)
+    stop = last
+  end
+  return start and stop and { start, stop } or nil
 end
 
 -- -- auth ---------------------------------------------------------------------------------------------------------
@@ -780,6 +810,8 @@ local function plan(query)
       p.unread = not negated
     elseif key == 'since' then
       p.since = since(value)
+    elseif key == 'on' then
+      p.on = day_range(value)
     else
       body = body:gsub('^"(.*)"$', '%1'):lower()
       if body ~= '' then
@@ -801,6 +833,23 @@ local function matches(c, p, my_id, index)
   end
   if p.since and (epoch(c.preview and c.preview.at or c.updated) or 0) < p.since then
     return false
+  end
+  -- `on:`: the chat's messages of those days (from the index); its last activity bounds them
+  local day_msgs
+  if p.on then
+    if (epoch(c.preview and c.preview.at or c.updated) or 0) < p.on[1] then
+      return false
+    end
+    day_msgs = {}
+    for _, m in ipairs(index and index[c.id] and index[c.id].messages or {}) do
+      local t = epoch(m.at)
+      if t and t >= p.on[1] and t < p.on[2] then
+        table.insert(day_msgs, m)
+      end
+    end
+    if #day_msgs == 0 then
+      return false
+    end
   end
   local people = {}
   for _, m in ipairs(c.members or {}) do
@@ -825,10 +874,10 @@ local function matches(c, p, my_id, index)
     end
   end
   if #missing == 0 then
-    return true
+    return true, day_msgs and day_msgs[1] -- with `on:`, the row shows the newest message of those days
   end
   local found, best, best_n = {}, nil, 0
-  for _, m in ipairs(index and index[c.id] and index[c.id].messages or {}) do
+  for _, m in ipairs(day_msgs or index and index[c.id] and index[c.id].messages or {}) do
     local text, n = m.text:lower(), 0
     for _, w in ipairs(missing) do
       if text:find(w, 1, true) then
@@ -962,7 +1011,7 @@ local function search(opts, rest)
   end
   local my_id = data.me
   local p = plan(query)
-  local index = #p.words > 0 and read_json(INDEX) or nil
+  local index = (#p.words > 0 or p.on) and read_json(INDEX) or nil
   local found, hits = {}, {}
   local remote = server_hits(p.words)
   local loose = remote and vim.tbl_extend('force', p, { words = {} }) -- the query's other filters still apply
@@ -970,7 +1019,7 @@ local function search(opts, rest)
   for _, c in ipairs(data.chats) do
     listed[c.id] = true
     local ok, hit = matches(c, p, my_id, index)
-    if not ok and remote and remote[c.id] and matches(c, loose, my_id) then
+    if not ok and remote and remote[c.id] and matches(c, loose, my_id, index) then
       ok, hit = true, remote[c.id]
     end
     if ok then
@@ -983,7 +1032,7 @@ local function search(opts, rest)
   end, data.chats)
   if query == '' then
     out(
-      ('\t\27[2m%d chats, %d unread (cache %s%s). Filter: words with: type:1:1|group|meeting is:unread since:7d   enter: open chat  ctrl-r: refresh\27[0m\t\t'):format(
+      ('\t\27[2m%d chats, %d unread (cache %s%s). Filter: words with: type:1:1|group|meeting is:unread since:7d on:11-05   enter: open chat  ctrl-r: refresh\27[0m\t\t'):format(
         #data.chats,
         unread_count,
         age(data.at),
@@ -1102,8 +1151,10 @@ local function show(opts, rest)
   end
   local my_id = data.me
   local plain = opts.plain
-  local words = opts.match and plan(opts.match).words or {}
-  local list, err = messages(chat, tonumber(opts.count) or ((plain or #words > 0) and (#words > 0 and 100000 or 100) or 30), opts.fresh, #words > 0)
+  local q = opts.match and plan(opts.match) or {}
+  local words, on = q.words or {}, q.on
+  local searching = #words > 0 or on ~= nil
+  local list, err = messages(chat, tonumber(opts.count) or ((plain or searching) and (searching and 100000 or 100) or 30), opts.fresh, searching)
   if not list then
     out((plain and '' or '\27[31m') .. 'Cannot fetch the messages: ' .. err .. (plain and '' or '\27[0m'))
     return
@@ -1112,6 +1163,7 @@ local function show(opts, rest)
     list = vim.fn.reverse(list)
   end
   local lines = {}
+  local in_range = {} -- with `on:`, the entries of `lines` that belong to a message of those days
   local name = chat_name(chat, my_id)
   if plain then
     vim.list_extend(lines, { '# ' .. name, '' })
@@ -1127,6 +1179,8 @@ local function show(opts, rest)
   end
   for _, m in ipairs(list) do
     local who = m.fromId == my_id and 'You' or (m.from or '?')
+    local t = on and epoch(m.at)
+    local first = #lines + 1
     if m.type ~= 'message' then
       local what = (m.event or m.type or 'event'):gsub('^#microsoft%.graph%.', ''):gsub('EventMessageDetail$', '')
       table.insert(
@@ -1155,19 +1209,35 @@ local function show(opts, rest)
       table.insert(lines, render_quotes(m.text, plain))
       table.insert(lines, '')
     end
+    if t and t >= on[1] and t < on[2] then
+      for i = first, #lines do
+        in_range[i] = i == first and 'head' or true
+      end
+    end
   end
-  if #words == 0 then
+  if not searching then
     out(table.concat(lines, '\n'))
     return
   end
-  -- highlight the words, and tell liveq's picker the lines that have them, so the preview scrolls to the first
-  local numbers = {}
-  for n, line in ipairs(vim.split(table.concat(lines, '\n'), '\n', { plain = true })) do
-    local marked, hit = highlight(line, words)
-    if hit and n > 1 then
-      table.insert(numbers, n)
+  -- highlight the words, and tell liveq's picker the lines that have them, so the preview scrolls to the first; with
+  -- `on:`, only those in the messages of its days count, and when none has the words (they matched the chat's name or
+  -- members), the first line of each of those messages
+  local numbers, heads, n = {}, {}, 0
+  for i, entry in ipairs(lines) do
+    for j, line in ipairs(vim.split(entry, '\n', { plain = true })) do
+      n = n + 1
+      local marked, hit = highlight(line, words)
+      if n > 1 and hit and (not on or in_range[i]) then
+        table.insert(numbers, n)
+      end
+      if in_range[i] == 'head' and j == 1 then
+        table.insert(heads, n)
+      end
+      io.stdout:write(marked, '\n')
     end
-    io.stdout:write(marked, '\n')
+  end
+  if on and #numbers == 0 then
+    numbers = heads
   end
   io.stdout:flush()
   local file = os.getenv 'LIVEQ_MATCH_FILE'
@@ -1277,6 +1347,7 @@ local PREFIXES = {
   { 'type:', '1:1, group, meeting or self' },
   { 'is:unread', 'chats with unread messages' },
   { 'since:', 'last activity since: 1d, 7d, 2w, 1M or a date' },
+  { 'on:', 'messages on a day: today, yesterday, 3d (ago), 11-05, 2026-11-05, or A..B' },
 }
 
 local function complete(opts, rest)
@@ -1324,9 +1395,14 @@ local function complete(opts, rest)
       local n = list[i][1]
       add(sign .. 'with:' .. (n:find '[%s,]' and ('"' .. n .. '"') or n), 'value', list[i][2] .. ' chats')
     end
-  elseif key == 'type' or key == 'since' or key == 'is' then
+  elseif key == 'type' or key == 'since' or key == 'is' or key == 'on' then
     context = 'value'
-    local values = ({ type = { '1:1', 'group', 'meeting', 'self' }, since = { '1d', '7d', '2w', '1M', '3M' }, is = { 'unread' } })[key]
+    local values = ({
+      type = { '1:1', 'group', 'meeting', 'self' },
+      since = { '1d', '7d', '2w', '1M', '3M' },
+      is = { 'unread' },
+      on = { 'today', 'yesterday', os.date('%m-%d', os.time() - 2 * DAY) },
+    })[key]
     for _, v in ipairs(values) do
       if v:sub(1, #value) == value then
         add(sign .. key .. ':' .. v, 'value')

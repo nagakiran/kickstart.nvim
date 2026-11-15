@@ -13,7 +13,7 @@ local util = require 'liveq.util'
 
 local function syntax()
   vim.cmd [[
-    syntax match teamsQueryPrefix /\(^\|\s\)\zs-\?\(with\|type\|is\|since\):/
+    syntax match teamsQueryPrefix /\(^\|\s\)\zs-\?\(with\|type\|is\|since\|on\):/
     syntax region teamsQueryString start=/"/ end=/"/ oneline
     highlight default link teamsQueryPrefix Identifier
     highlight default link teamsQueryString String
