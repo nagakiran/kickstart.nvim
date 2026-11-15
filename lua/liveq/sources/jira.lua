@@ -88,6 +88,6 @@ return {
     },
   },
 
-  commands = { search = 'JiraSearch', saved = 'JiraSaved', query = 'JiraJql', show = 'JiraShow' },
-  keymaps = { search = '<leader>js', saved = '<leader>jr', query = '<leader>jq', show = '<leader>ji', open = '<leader>jo' },
+  commands = { search = 'JiraSearch', saved = 'JiraSaved', resume = 'JiraResume', query = 'JiraJql', show = 'JiraShow' },
+  keymaps = { search = '<leader>js', resume = '<leader>jr', saved = '<leader>jv', query = '<leader>jq', show = '<leader>ji', open = '<leader>jo' },
 }

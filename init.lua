@@ -291,8 +291,8 @@ require('liveq').setup {
       title = 'Mail (HPE)',
       config = '~/rcfiles/.notmuch-hpe',
       primary = true,
-      commands = { search = 'MailSearch', saved = 'MailSaved', query = 'MailQuery', show = 'MailShow' },
-      keymaps = { search = '<leader>ms', saved = '<leader>mr', query = '<leader>mq', show = '<leader>mi' },
+      commands = { search = 'MailSearch', saved = 'MailSaved', resume = 'MailResume', query = 'MailQuery', show = 'MailShow' },
+      keymaps = { search = '<leader>ms', resume = '<leader>mr', saved = '<leader>mv', query = '<leader>mq', show = '<leader>mi' },
     },
     gmail = require 'liveq.sources.notmuch' {
       title = 'Mail (Gmail)',
@@ -304,8 +304,8 @@ require('liveq').setup {
     mr = require 'liveq.sources.gitlab' {
       project = 'sd/security_director',
       repo = '~/stormbreaker/security_director',
-      commands = { search = 'MrSearch', saved = 'MrSaved', query = 'MrQuery', show = 'MrShow' },
-      keymaps = { search = '<leader>Ms', saved = '<leader>Mr', query = '<leader>Mq', show = '<leader>Mi', open = '<leader>Mo' },
+      commands = { search = 'MrSearch', saved = 'MrSaved', resume = 'MrResume', query = 'MrQuery', show = 'MrShow' },
+      keymaps = { search = '<leader>Ms', resume = '<leader>Mr', saved = '<leader>Mv', query = '<leader>Mq', show = '<leader>Mi', open = '<leader>Mo' },
     },
     bm = require 'liveq.sources.linkding' {
       commands = { search = 'BookmarkSearch', query = 'BookmarkQuery' },

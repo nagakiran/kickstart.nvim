@@ -15,7 +15,7 @@ require('liveq').setup { sources = { jira = require 'liveq.sources.jira' } }
 require('liveq').setup_cmp(cmp)
 ```
 
-Commands: `:Liveq {source} [query]`, `:LiveqResume [source]` (also `<leader>lr`: reopens the last search with its query and results; one hidden with `alt-esc` comes back exactly as it was, cursor included), `:LiveqSaved {source}`, `:LiveqQuery {source} [query]`, `:LiveqShow {source} [id]`; a source may define its own names and keymaps (Jira: `:JiraSearch`, `:JiraSaved`, `:JiraJql`, `:JiraShow`, `<leader>js/jr/jq/ji/jo`).
+Commands: `:Liveq {source} [query]`, `:LiveqResume [source]` (also `<leader>lr`: reopens the last search of any source with its query and results; one hidden with `alt-esc` comes back exactly as it was, cursor included; a source's `resume` keymap/command reopens that source's own last search, whatever was searched since), `:LiveqSaved {source}`, `:LiveqQuery {source} [query]`, `:LiveqShow {source} [id]`; a source may define its own names and keymaps (Jira: `:JiraSearch`, `:JiraSaved`, `:JiraResume`, `:JiraJql`, `:JiraShow`, `<leader>js` search, `jr` resume, `jv` saved, `jq` query, `ji` show, `jo` open). The convention for the keys: `<leader>X` + `s` search, `r` resume, `v` saved, `q` query buffer, `i` show, `o` open (mail `m`, MRs `M`, Teams `t`).
 
 Keys in the picker: `tab` complete the query · `ctrl-space` select · `enter` insert the id(s) at the cursor · `alt-enter` insert "id - title" · `ctrl-o` browser · `ctrl-y` yank "id - title" · `ctrl-v` details float · `alt-b` open in a buffer (`liveq://SOURCE/ID`, reused when opened again) · `alt-n`/`alt-p` next/previous match of the query in the preview (sources with `match`) · `alt-t` threaded view (sources with `tree`) · `alt-s` sort the results (sources with `sort`: a list of the ways to sort, e.g. by a column shown; the choice is written into the query, so the server sorts and saved queries keep it) · `alt-c` next set of columns (sources with `views`; the prompt names it, e.g. `jql [people]> `) · `alt-e` edit the query in a buffer with completion (`<CR>` in normal mode or `:w` searches with it) · `ctrl-r`/`ctrl-s` saved queries · `ctrl-q` all results into a Markdown buffer; plus the source's own actions.
 
@@ -62,8 +62,8 @@ Optional subcommands (declared by the source, see below):
   header_row = true,  -- `search --header` prints a line of column headings first
   sort = true,  -- `sort -f tsv` lists ways to sort; alt-s picks one
   views = { { name = 'default', args = { '--columns', 'type,status' } }, { name = 'people', args = { ... } } },  -- alt-c cycles them
-  commands = { search = 'JiraSearch', saved = 'JiraSaved', query = 'JiraJql', show = 'JiraShow' },
-  keymaps = { search = '<leader>js', saved = '<leader>jr', query = '<leader>jq', show = '<leader>ji', open = '<leader>jo' },
+  commands = { search = 'JiraSearch', saved = 'JiraSaved', resume = 'JiraResume', query = 'JiraJql', show = 'JiraShow' },
+  keymaps = { search = '<leader>js', resume = '<leader>jr', saved = '<leader>jv', query = '<leader>jq', show = '<leader>ji', open = '<leader>jo' },
 }
 ```
 
