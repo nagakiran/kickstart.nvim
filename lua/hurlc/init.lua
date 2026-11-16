@@ -1,12 +1,13 @@
 -- hurlc: Postman-style request collections on top of hurl.nvim.
 --
 -- A collection is a directory under the root (default ~/patches/juniper/curl); a request is a hurl entry headed by
--- `# @name: ...`. Environments are <root>/envs/<env>.env; the active one is <root>/vars.env, written by
--- `refreshHurlToken` (bin/juniper.sh) and found by hurl.nvim from any subdirectory (it walks up to the git root).
+-- `# @name: ...`. Environments are <root>/envs/<env>.env, each with one or more user/org profiles in
+-- <root>/envs/iam-credentials.local.json; the active env/profile is <root>/vars.env, written by `refreshHurlToken`
+-- (bin/juniper.sh) and found by hurl.nvim from any subdirectory (it walks up to the git root).
 --
 --   require('hurlc').pick()        fzf-lua picker over every request: run, edit, copy as curl, import, duplicate
 --   require('hurlc').run_cursor()  run the request under the cursor (recorded in the history)
---   require('hurlc').switch_env()  pick an environment, refresh its IAM token, rewrite vars.env
+--   require('hurlc').switch_env()  pick an env/profile, log in as that user and org, rewrite vars.env
 --   require('hurlc').history()     past responses of the request under the cursor
 --
 -- Each response hurl.nvim shows for a request started here is also saved to
@@ -53,8 +54,13 @@ local function read_env(path)
   return vars
 end
 
+--- The active environment as `env/profile` (just `env` for a vars.env written before profiles existed).
 function M.active_env()
-  return read_env(M.root .. '/vars.env').env
+  local vars = read_env(M.root .. '/vars.env')
+  if not vars.env then
+    return nil
+  end
+  return vars.iam_profile and (vars.env .. '/' .. vars.iam_profile) or vars.env
 end
 
 --- The entries of a hurl file given as LINES: { name, method, target, start, lnum, stop, index }. `start` is the first
@@ -136,15 +142,233 @@ end
 
 -- ── running and history ────────────────────────────────────────────────────────────────────────────────────────────
 
+-- ── lookups: variables picked from a live response (pickers/pickers.json) ────────────────────────────────────────
+
+--- The lookup definitions, keyed by variable name: { title, request, rows, header }.
+function M.lookups()
+  local path = M.root .. '/pickers/pickers.json'
+  if vim.fn.filereadable(path) == 0 then
+    return {}
+  end
+  local ok, defs = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), '\n'))
+  if not ok then
+    notify('invalid ' .. path .. ': ' .. defs, vim.log.levels.ERROR)
+    return {}
+  end
+  local lookups = {}
+  for var, def in pairs(defs) do
+    if not var:match '^_' then
+      lookups[var] = def
+    end
+  end
+  return lookups
+end
+
+--- Sets KEY=VALUE in FILE (replacing the line of KEY, else appending), creating the file.
+local function set_kv(file, key, value)
+  local lines = vim.fn.filereadable(file) == 1 and vim.fn.readfile(file) or {}
+  local done = false
+  for i, l in ipairs(lines) do
+    if l:match('^' .. vim.pesc(key) .. '=') then
+      lines[i], done = key .. '=' .. value, true
+    end
+  end
+  if not done then
+    table.insert(lines, key .. '=' .. value)
+  end
+  vim.fn.writefile(lines, file)
+end
+
+--- Saves a picked value for the active env: envs/<env>.local.env (kept across env/profile switches, merged into
+--- vars.env by refreshHurlToken) and vars.env itself (so the next run sees it at once).
+local function save_var(env, key, value)
+  set_kv(('%s/envs/%s.local.env'):format(M.root, env), key, value)
+  set_kv(M.root .. '/vars.env', key, value)
+end
+
+--- The response a lookup's request returns, to CALLBACK(body, err), always on the main loop: vim.system's on_exit
+--- runs in a fast event context, where the callback's own vim.system():wait() (jq) raises E5560. Replaceable (tests
+--- stub it).
+function M.fetch(def, callback)
+  vim.system({ 'hurl', '--variables-file', M.root .. '/vars.env', M.root .. '/pickers/' .. def.request }, { text = true }, function(res)
+    vim.schedule(function()
+      if res.code ~= 0 then
+        callback(nil, vim.trim(res.stderr ~= '' and res.stderr or res.stdout or 'hurl failed'))
+      else
+        callback(res.stdout)
+      end
+    end)
+  end)
+end
+
+--- Picks a value for VAR from its lookup (fetched live with the active env), saves it, then calls ON_DONE(value).
+function M.lookup(var, on_done)
+  local def = M.lookups()[var]
+  local vars = read_env(M.root .. '/vars.env')
+  if not def then
+    return notify('no lookup for ' .. var .. ' in pickers/pickers.json', vim.log.levels.WARN)
+  end
+  if not vars.env then
+    return notify('no active environment: switch to one first (<leader>he)', vim.log.levels.WARN)
+  end
+  M.ensure_token(function()
+    notify(('fetching %s for %s…'):format(def.title or var, M.active_env()))
+    M.fetch(def, function(body, err)
+      local rows
+      if body then
+        local res = vim.system({ 'jq', '-r', def.rows }, { stdin = body, text = true }):wait()
+        if res.code ~= 0 then
+          err = 'jq: ' .. vim.trim(res.stderr or '') .. ' (response starts: ' .. body:sub(1, 120):gsub('%s+', ' ') .. ')'
+        else
+          rows = vim.split(res.stdout, '\n', { trimempty = true })
+        end
+      end
+      vim.schedule(function()
+        if not rows then
+          return notify(('could not fetch %s: %s'):format(def.title or var, err), vim.log.levels.ERROR)
+        end
+        if #rows == 0 then
+          return notify('no ' .. (def.title or var) .. ' found in ' .. M.active_env(), vim.log.levels.WARN)
+        end
+        -- align the label columns (and the header) by padding, so they line up whatever their widths
+        local current, cells, widths = vars[var], {}, {}
+        local header = def.header and vim.split(def.header, '\t') or nil
+        cells[0] = header -- row 0: the column names, which have no value column
+        for i, row in ipairs(rows) do
+          cells[i] = vim.split(row, '\t')
+        end
+        for i = header and 0 or 1, #rows do
+          local first = i == 0 and 1 or 2
+          for c = first, #cells[i] do
+            local col = c - first + 1
+            widths[col] = math.max(widths[col] or 0, vim.fn.strdisplaywidth(cells[i][c]))
+          end
+        end
+        local function pad(fields, first)
+          local out = {}
+          for c = first, #fields do
+            local w = widths[c - first + 1]
+            table.insert(out, fields[c] .. string.rep(' ', w - vim.fn.strdisplaywidth(fields[c])))
+          end
+          return table.concat(out, '  ')
+        end
+        local lines, cells_by_value = {}, {}
+        for i = 1, #rows do
+          cells_by_value[cells[i][1]] = cells[i][2] or cells[i][1] -- the label saved is the first column (e.g. host name)
+          local value = cells[i][1]
+          table.insert(lines, ('%s\t%s %s'):format(value, value == current and '●' or ' ', pad(cells[i], 2)))
+        end
+        require('fzf-lua').fzf_exec(lines, {
+          prompt = (def.title or var) .. '> ',
+          winopts = { title = (' %s · %s '):format(var, M.active_env()), height = 0.5, width = 0.7, preview = { hidden = true } },
+          fzf_opts = {
+            ['--delimiter'] = '\t',
+            ['--with-nth'] = '2..',
+            ['--header'] = header and ('  ' .. pad(cells[0], 1)) or nil,
+          },
+          actions = {
+            ['enter'] = function(selected)
+              local fields = selected[1] and vim.split(selected[1], '\t')
+              if not fields then
+                return
+              end
+              local label = cells_by_value and cells_by_value[fields[1]] or vim.trim(fields[2] or '')
+              save_var(vars.env, var, fields[1])
+              save_var(vars.env, var .. '_label', label)
+              notify(('%s = %s (%s)'):format(var, label, vars.env))
+              if on_done then
+                on_done(fields[1])
+              end
+            end,
+          },
+        })
+      end)
+    end)
+  end)
+end
+
+--- The {{variables}} E uses, in order of first use.
+local function vars_used(e)
+  local used, seen = {}, {}
+  for _, l in ipairs(block(e)) do
+    for name in l:gmatch '{{%s*([%w_%-.]+)%s*}}' do
+      if not seen[name] then
+        seen[name] = true
+        table.insert(used, name)
+      end
+    end
+  end
+  return used
+end
+
+--- Calls ON_READY once every variable E uses that has a lookup is set, picking the missing ones first.
+local function ensure_vars(e, on_ready)
+  local lookups, vars = M.lookups(), read_env(M.root .. '/vars.env')
+  for _, name in ipairs(vars_used(e)) do
+    if lookups[name] and (vars[name] or '') == '' then
+      return M.lookup(name, function()
+        ensure_vars(e, on_ready)
+      end)
+    end
+  end
+  on_ready()
+end
+
+--- Picks a new value for one of the looked-up variables E uses (any lookup when E uses none, or E is nil).
+function M.set_variable(e)
+  local lookups = M.lookups()
+  local names = {}
+  for _, name in ipairs(e and vars_used(e) or {}) do
+    if lookups[name] then
+      table.insert(names, name)
+    end
+  end
+  if #names == 0 then
+    names = vim.tbl_keys(lookups)
+    table.sort(names)
+  end
+  if #names == 0 then
+    return notify('no lookups defined in pickers/pickers.json', vim.log.levels.WARN)
+  end
+  if #names == 1 then
+    return M.lookup(names[1])
+  end
+  local vars = read_env(M.root .. '/vars.env')
+  vim.ui.select(names, {
+    prompt = 'Variable: ',
+    format_item = function(n)
+      return ('%-16s %s'):format(n, vars[n .. '_label'] or vars[n] or '(unset)')
+    end,
+  }, function(n)
+    if n then
+      M.lookup(n)
+    end
+  end)
+end
+
 local function run_here(e)
   if vim.bo.modified then
     vim.cmd 'write' -- hurl reads the file on disk; an unsaved buffer would shift the entry index
   end
-  if vim.api.nvim_win_get_cursor(0)[1] < e.lnum then
-    vim.api.nvim_win_set_cursor(0, { e.lnum, 0 }) -- HurlRunnerAt wants the cursor inside the request, not its comments
-  end
-  M._ctx = { rel = e.rel, name = e.name, env = M.active_env(), time = os.time() }
-  vim.cmd 'HurlRunnerAt'
+  local buf = vim.api.nvim_get_current_buf()
+  M.ensure_token(function()
+    ensure_vars(e, function()
+      if vim.api.nvim_get_current_buf() ~= buf then
+        open(e) -- a lookup picker ran in between
+      end
+      if vim.api.nvim_win_get_cursor(0)[1] < e.lnum then
+        vim.api.nvim_win_set_cursor(0, { e.lnum, 0 }) -- HurlRunnerAt wants the cursor inside the request, not its comments
+      end
+      -- HurlRunnerAt finds the entry with vim.treesitter.get_node(), which only reads the tree already built; a buffer
+      -- the picker just opened is still being parsed asynchronously, so it would see no entry and silently do nothing
+      local ok, parser = pcall(vim.treesitter.get_parser, 0, 'hurl')
+      if ok and parser then
+        parser:parse(true)
+      end
+      M._ctx = { rel = e.rel, name = e.name, env = M.active_env(), time = os.time() }
+      vim.cmd 'HurlRunnerAt'
+    end)
+  end)
 end
 
 function M.run(e)
@@ -158,6 +382,11 @@ function M.run_cursor()
     return notify('no request under the cursor', vim.log.levels.WARN)
   end
   run_here(e)
+end
+
+--- Picks a new value for a looked-up variable of the request under the cursor.
+function M.set_variable_cursor()
+  M.set_variable(entry_at_cursor())
 end
 
 local function record(response, type)
@@ -305,44 +534,111 @@ end
 
 -- ── environments ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-function M.envs()
-  local names = {}
-  for _, f in ipairs(vim.fn.glob(M.root .. '/envs/*.env', false, true)) do
-    table.insert(names, vim.fn.fnamemodify(f, ':t:r'))
+local JUNIPER_SH = 'source ~/rcfiles/bin/juniper.sh && HURL_COLLECTIONS_ROOT=%s '
+
+--- Every env/profile pair: { env, profile, user, org } from `listHurlProfiles` (envs/*.env x the iam-credentials
+--- files, see refreshHurlToken in bin/juniper.sh). org is '-' when the user's first org is taken.
+function M.profiles()
+  local cmd = (JUNIPER_SH .. 'listHurlProfiles'):format(vim.fn.shellescape(M.root))
+  local result = vim.system({ 'bash', '-c', cmd }, { text = true }):wait(15000)
+  local profiles = {}
+  for _, line in ipairs(vim.split(result.stdout or '', '\n', { trimempty = true })) do
+    local env, profile, user, org = unpack(vim.split(line, '\t'))
+    if profile then
+      table.insert(profiles, { env = env, profile = profile, user = user, org = org })
+    end
   end
-  table.sort(names)
-  return names
+  return profiles
 end
 
---- Picks an environment and runs `refreshHurlToken` for it, then calls ON_DONE (with the env) on success.
+--- Runs `refreshHurlToken SPEC` (env/profile) in the background, then ON_DONE(ok, message) on the main loop.
+function M.refresh(spec, on_done)
+  local stderr = {}
+  vim.fn.jobstart({ 'bash', '-c', (JUNIPER_SH .. 'refreshHurlToken %s'):format(vim.fn.shellescape(M.root), vim.fn.shellescape(spec)) }, {
+    stderr_buffered = true,
+    on_stderr = function(_, data)
+      stderr = data
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        on_done(code == 0, vim.trim(table.concat(stderr, ' ')))
+      end)
+    end,
+  })
+end
+
+--- Seconds until TOKEN (a JWT) expires; nil when it cannot be read.
+local function token_ttl(token)
+  local payload = token and token:match '^[^.]+%.([^.]+)%.'
+  if not payload then
+    return nil
+  end
+  payload = payload:gsub('-', '+'):gsub('_', '/')
+  payload = payload .. string.rep('=', (4 - #payload % 4) % 4)
+  local ok, claims = pcall(function()
+    return vim.json.decode(vim.base64.decode(payload))
+  end)
+  return ok and type(claims) == 'table' and tonumber(claims.exp) and (claims.exp - os.time()) or nil
+end
+
+--- Calls ON_READY with a usable token in vars.env. The token is the one the last switch wrote (it persists across nvim
+--- sessions), so normally this is a no-op; once it has expired (IAM tokens last ~30 min) or is about to, it logs in
+--- again as the same env/profile first -- refreshHurlToken reuses its own cache when that copy is still good.
+function M.ensure_token(on_ready)
+  local vars = read_env(M.root .. '/vars.env')
+  local ttl = token_ttl(vars.x_iam_token)
+  if not vars.env or (ttl and ttl > 60) then
+    return on_ready() -- no env chosen yet (requests without a token still run), or the token is good
+  end
+  local spec = vars.iam_profile and (vars.env .. '/' .. vars.iam_profile) or vars.env
+  notify(('token for %s %s, logging in again…'):format(spec, ttl and 'expired' or 'unreadable'))
+  M.refresh(spec, function(ok, msg)
+    if not ok then
+      return notify(('could not refresh the token for %s: %s'):format(spec, msg), vim.log.levels.ERROR)
+    end
+    on_ready()
+  end)
+end
+
+--- Picks an env/profile (one fuzzy list, the active one marked) and runs `refreshHurlToken` for it, which logs in
+--- with that profile's user and org and rewrites vars.env; then calls ON_DONE (with `env/profile`) on success.
 function M.switch_env(on_done)
+  local profiles = M.profiles()
+  if #profiles == 0 then
+    return notify('no profiles: add users to ' .. M.root .. '/envs/iam-credentials.local.json', vim.log.levels.WARN)
+  end
   local current = M.active_env()
-  vim.ui.select(M.envs(), {
-    prompt = 'Environment' .. (current and (' (now ' .. current .. ')') or '') .. ': ',
-  }, function(env)
-    if not env then
+  local w_env, w_profile, w_user = 0, 0, 0
+  for _, p in ipairs(profiles) do
+    w_env, w_profile = math.max(w_env, #p.env), math.max(w_profile, #p.profile)
+    w_user = math.max(w_user, #p.user)
+  end
+  vim.ui.select(profiles, {
+    prompt = 'Environment / profile' .. (current and (' (now ' .. current .. ')') or '') .. ': ',
+    format_item = function(p)
+      local mark = (p.env .. '/' .. p.profile) == current and '● ' or '  '
+      return ('%s%-' .. w_env .. 's  %-' .. w_profile .. 's  %-' .. w_user .. 's  %s'):format(
+        mark,
+        p.env,
+        p.profile,
+        p.user,
+        p.org == '-' and '(first org)' or p.org
+      )
+    end,
+  }, function(p)
+    if not p then
       return
     end
-    local stderr = {}
-    local cmd = ('source ~/rcfiles/bin/juniper.sh && HURL_COLLECTIONS_ROOT=%s refreshHurlToken %s'):format(vim.fn.shellescape(M.root), vim.fn.shellescape(env))
-    vim.fn.jobstart({ 'bash', '-c', cmd }, {
-      stderr_buffered = true,
-      on_stderr = function(_, data)
-        stderr = data
-      end,
-      on_exit = function(_, code)
-        vim.schedule(function()
-          if code == 0 then
-            notify('environment ' .. env)
-            if on_done then
-              on_done(env)
-            end
-          else
-            notify(('could not switch to %s: %s'):format(env, vim.trim(table.concat(stderr, ' '))), vim.log.levels.ERROR)
-          end
-        end)
-      end,
-    })
+    local spec = p.env .. '/' .. p.profile
+    M.refresh(spec, function(ok, msg)
+      if not ok then
+        return notify(('could not switch to %s: %s'):format(spec, msg), vim.log.levels.ERROR)
+      end
+      notify(msg:match 'Wrote .- for (.*)$' or spec)
+      if on_done then
+        on_done(spec)
+      end
+    end)
   end)
 end
 
@@ -454,6 +750,18 @@ end
 
 local METHOD_COLOR = { GET = '32', POST = '33', PUT = '34', PATCH = '35', DELETE = '31' }
 
+--- The requests picker's title: the looked-up values in force (e.g. the device), so a run's target is visible.
+function M.title()
+  local vars, parts = read_env(M.root .. '/vars.env'), {}
+  for name in pairs(M.lookups()) do
+    if vars[name] and vars[name] ~= '' then
+      table.insert(parts, name:gsub('_uuid$', '') .. ': ' .. (vars[name .. '_label'] or vars[name]))
+    end
+  end
+  table.sort(parts)
+  return ' API requests' .. (#parts > 0 and (' · ' .. table.concat(parts, ' · ')) or '') .. ' '
+end
+
 function M.pick()
   local items = M.index()
   if #items == 0 then
@@ -508,14 +816,14 @@ function M.pick()
   local env = M.active_env()
   require('fzf-lua').fzf_exec(lines, {
     prompt = (env and ('[' .. env .. '] ') or '') .. 'requests> ',
-    winopts = { title = ' API requests ', preview = { layout = 'vertical', vertical = 'down:55%' } },
+    winopts = { title = M.title(), preview = { layout = 'vertical', vertical = 'down:55%' } },
     preview = 'sed -n {2},{3}p {1} | ' .. JWT_MASK,
     fzf_opts = {
       ['--ansi'] = true,
       ['--delimiter'] = '\t',
       ['--with-nth'] = '5',
       ['--multi'] = true,
-      ['--header'] = 'enter run · ^e/alt-e edit · ^y copy curl · alt-n new from clipboard · alt-d duplicate · ^x env · alt-h history · ^q quickfix',
+      ['--header'] = 'enter run · ^e/alt-e edit · ^y copy curl · alt-n new from clipboard · alt-d duplicate · ^x env · alt-v set variable · alt-h history · ^q quickfix',
     },
     actions = {
       ['enter'] = first(M.run),
@@ -527,6 +835,7 @@ function M.pick()
       end,
       ['alt-d'] = first(M.duplicate),
       ['alt-h'] = first(M.history),
+      ['alt-v'] = first(M.set_variable),
       ['ctrl-x'] = function()
         M.switch_env(function()
           M.pick()
