@@ -13,7 +13,7 @@
 --
 -- The query, evaluated locally over the cache:
 --   words (each must be in the chat's name, members or messages; -word excludes, on name/members/last message only)
---   with:NAME (a member's name or address)   type:1:1|group|meeting   is:unread   since:7d|2w|1M|2026-11-01 (last activity)
+--   with:NAME (a member's name or address)   type:1:1|group|meeting (or the list's tags: grp|mtg|you)   is:unread   since:7d|2w|1M|2026-11-01 (last activity)
 --   on:DATE (a message that local day: 2026-11-05, 11-05, today, yesterday, 3d = three days ago; on:11-03..11-05 a range;
 --   with words, a message of those days must have the words not found in the name/members/last message)
 --
@@ -44,7 +44,19 @@ local TTL = tonumber(os.getenv 'LIVEQ_TEAMS_TTL') or 120
 local MAX_CHATS = tonumber(os.getenv 'LIVEQ_TEAMS_MAX') or 150
 local DAY = 24 * 3600
 local UNITS = { d = DAY, w = 7 * DAY, M = 30 * DAY, y = 365 * DAY }
-local TYPES = { ['1:1'] = 'oneOnOne', dm = 'oneOnOne', oneonone = 'oneOnOne', group = 'group', meeting = 'meeting', self = 'self', notes = 'self' }
+local TYPES = {
+  ['1:1'] = 'oneOnOne',
+  dm = 'oneOnOne',
+  oneonone = 'oneOnOne',
+  group = 'group',
+  grp = 'group',
+  meeting = 'meeting',
+  mtg = 'meeting',
+  meet = 'meeting',
+  self = 'self',
+  notes = 'self',
+  you = 'self',
+}
 local TYPE_TAG = { oneOnOne = '\27[32m1:1\27[0m', group = '\27[34mgrp\27[0m', meeting = '\27[35mmtg\27[0m', self = '\27[33myou\27[0m' }
 -- The self chat ("notes to self") is not in /me/chats and /chats/48:notes is refused ("not a ChatThread"), but its
 -- messages are readable at /chats/48:notes/messages: fetch() adds it to the list from its newest message.
