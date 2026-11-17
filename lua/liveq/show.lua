@@ -106,11 +106,11 @@ function M.show(source, id, opts)
   for _, lhs in ipairs { 'q', '<Esc>' } do
     vim.keymap.set('n', lhs, '<cmd>close<CR>', { buffer = buf, nowait = true })
   end
-  if source.url then
-    vim.keymap.set('n', 'gx', function()
+  M.map_gx(buf, function()
+    if source.url then
       M.open(source, id)
-    end, { buffer = buf, desc = 'Open in browser' })
-  end
+    end
+  end)
 end
 
 --- Opens an item in a buffer of its own in the current window (`<backend> show --plain -- ID`, as Markdown), named
@@ -144,11 +144,23 @@ function M.buffer(source, id, opts)
   vim.api.nvim_win_set_buf(0, buf)
   vim.wo.wrap = true
   position(source, opts, start)
-  if source.url then
-    vim.keymap.set('n', 'gx', function()
+  M.map_gx(buf, function()
+    if source.url then
       M.open(source, id)
-    end, { buffer = buf, desc = 'Open in browser' })
-  end
+    end
+  end)
+end
+
+--- Maps `gx` in BUF: the link under the cursor in the browser, else `fallback` (e.g. the item itself).
+function M.map_gx(buf, fallback)
+  vim.keymap.set('n', 'gx', function()
+    local url = util.url_under_cursor()
+    if url then
+      vim.ui.open(url)
+    else
+      fallback()
+    end
+  end, { buffer = buf, desc = 'Open the link under the cursor, else the item, in the browser' })
 end
 
 --- Opens an item in the browser: `<backend> url -- ID`.

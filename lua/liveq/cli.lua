@@ -10,6 +10,7 @@
 --   nvim -l cli.lua sort --cmd '<backend>' [--args-file FILE] -- QUERY        picks a sort, prints the new query
 --   nvim -l cli.lua match {first|next|prev} FILE     prints the fzf action that scrolls the preview to a match
 --   nvim -l cli.lua scroll FILE                      sends `match first` to the fzf of $FZF_PORT (with curl)
+--   nvim -l cli.lua links PREVIEW [FILE]             opens the links of the saved preview (alt-x of the picker)
 --
 -- FILE is the one a backend's `show --match` wrote ($LIVEQ_MATCH_FILE): the item's id, the index of the current match,
 -- and the line numbers of the matches (one followed by `t` goes to the top of the preview, e.g. where the message of
@@ -251,6 +252,91 @@ local function match_action(how, file)
   return ('change-preview-window(+%s%s)+change-preview-label( match %d/%d )'):format(line, top == 't' and '' or '/3', index, #lines)
 end
 
+--- `links PREVIEW [MATCH]`: opens the links of the preview that the picker saved to PREVIEW. The message around the
+--- current match of MATCH (the lines up to the blank ones before and after it) is the one meant: its link opens at
+--- once when it has just one, as does the only link of a preview without a match. Otherwise all the links of the
+--- preview are listed on the terminal, the message's first and then by distance from it, and the picked ones open.
+local function links(preview, match)
+  local f = preview and io.open(preview, 'r')
+  if not f then
+    fail 'no preview'
+  end
+  local text = f:read '*a'
+  f:close()
+  -- without colours and terminal hyperlinks (OSC 8), whose targets are kept as text after them
+  text = text:gsub('\27%]8;[^;]*;([^\27\7]*)[\27\7]\\?', ' %1 '):gsub('\27%[[%d;]*[A-Za-z]', '')
+  local lines = vim.split(text, '\n', { plain = true })
+
+  local at
+  local mf = (match and match ~= '') and io.open(match, 'r') or nil
+  if mf then
+    local _, index, numbers = mf:read '*l', tonumber(mf:read '*l' or ''), mf:read '*l' or ''
+    mf:close()
+    local nums = vim.split(numbers, ' ', { trimempty = true })
+    at = index and nums[index] and tonumber(nums[index]:match '^%d+')
+  end
+  local first, last = 1, #lines
+  if at then
+    first, last = at, at
+    while first > 1 and vim.trim(lines[first - 1]) ~= '' do
+      first = first - 1
+    end
+    while last < #lines and vim.trim(lines[last + 1]) ~= '' do
+      last = last + 1
+    end
+  end
+
+  local found, seen = {}, {}
+  for n, line in ipairs(lines) do
+    for _, u in ipairs(util.urls(line)) do
+      if not seen[u.url] then
+        seen[u.url] = true
+        local distance = (n >= first and n <= last) and 0 or math.min(math.abs(n - first), math.abs(n - last))
+        table.insert(found, { url = u.url, line = n, distance = distance, context = vim.trim(line) })
+      end
+    end
+  end
+  if #found == 0 then
+    fail 'no links in the preview'
+  end
+  table.sort(found, function(a, b)
+    if a.distance ~= b.distance then
+      return a.distance < b.distance
+    end
+    return a.line < b.line
+  end)
+
+  local urls
+  local in_message = vim.tbl_filter(function(u)
+    return u.distance == 0
+  end, found)
+  if #in_message == 1 and (at or #found == 1) then
+    urls = { in_message[1].url }
+  else
+    local choices = vim.tbl_map(function(u)
+      return ('%s\t\27[2m%s\27[0m'):format(u.url, u.context)
+    end, found)
+    local fzf_cmd = { 'fzf', '--ansi', '--delimiter=\t', '--height=40%', '--reverse', '--multi', '--prompt=links> ' }
+    local extra = os.getenv 'LIVEQ_FZF_OPTS'
+    if extra and extra ~= '' then
+      vim.list_extend(fzf_cmd, vim.split(extra, '%s+', { trimempty = true }))
+    end
+    local picked = vim.system(fzf_cmd, { stdin = table.concat(choices, '\n'), text = true }):wait()
+    if picked.code ~= 0 then
+      fail()
+    end
+    urls = vim.tbl_map(function(line)
+      return vim.split(line, '\t', { plain = true })[1]
+    end, vim.split(vim.trim(picked.stdout or ''), '\n', { trimempty = true }))
+  end
+  for _, url in ipairs(urls) do
+    local obj = vim.ui.open(url)
+    if obj then
+      obj:wait(5000)
+    end
+  end
+end
+
 local command = _G.arg[1]
 local opts, rest = parse(vim.list_slice(_G.arg, 2))
 if command == 'pick' then
@@ -261,11 +347,13 @@ elseif command == 'sort' then
   sort(opts, rest)
 elseif command == 'match' then
   io.stdout:write(match_action(rest[1], rest[2]))
+elseif command == 'links' then
+  links(rest[1], rest[2])
 elseif command == 'scroll' then
   local port = os.getenv 'FZF_PORT'
   if port and port ~= '' and vim.fn.executable 'curl' == 1 then
     vim.system({ 'curl', '-s', '-m', '2', '-XPOST', 'localhost:' .. port, '-d', match_action('first', rest[1]) }):wait()
   end
 else
-  fail('unknown command: ' .. tostring(command) .. ' (expected: pick, lines, sort, match, scroll)')
+  fail('unknown command: ' .. tostring(command) .. ' (expected: pick, lines, sort, match, scroll, links)')
 end

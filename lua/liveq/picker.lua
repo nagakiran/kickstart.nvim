@@ -213,6 +213,18 @@ function M.search(source, query)
     fzf_keymap['focus'] = 'change-preview-window(+1)+change-preview-label()'
     table.insert(header, 'alt-n/p match')
   end
+  -- alt-x opens the links of the preview: a copy of it is kept in a file (`tee`), and `cli.lua links` opens the link of
+  -- the message at the current match when it has just one, else lists them all on the terminal, nearest first
+  source.preview_state = source.preview_state or vim.fn.tempname()
+  -- not ending in the quoted path: fzf-lua takes a preview that starts and ends with a quote as quoted as a whole
+  local preview_tee = ' | tee ' .. vim.fn.shellescape(source.preview_state) .. ' 2>/dev/null'
+  fzf_keymap['alt-x'] = ('execute(%s -l %s links %s %s)'):format(
+    vim.fn.shellescape(vim.v.progpath),
+    vim.fn.shellescape(cli_path()),
+    vim.fn.shellescape(source.preview_state),
+    source.match_state and vim.fn.shellescape(source.match_state) or "''"
+  )
+  table.insert(header, 'alt-x links')
   -- a source with `tree` shows its items threaded (mail: the messages of each thread; Jira: subtasks under their
   -- parent) when alt-t is on: `search --tree`, whose rows tree.awk draws branches for; the state lives in a file that
   -- the search command tests, like the preview toggles
@@ -321,7 +333,7 @@ function M.search(source, query)
     exec_empty_query = true,
     keymap = { fzf = fzf_keymap },
     winopts = { title = ' ' .. source.title .. ' ', preview = { layout = 'vertical', vertical = 'down:50%' } },
-    preview = preview_prefix .. backend .. ' show' .. preview_flags .. preview_match .. ' -- {1}' .. preview_suffix,
+    preview = preview_prefix .. backend .. ' show' .. preview_flags .. preview_match .. ' -- {1}' .. preview_tee .. preview_suffix,
     fzf_opts = {
       ['--listen'] = source.match and true or nil, -- exports $FZF_PORT to the preview command
       ['--ansi'] = true,

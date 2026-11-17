@@ -88,4 +88,40 @@ function M.replace(text, start, finish, insert)
   return before .. insert .. after, vim.fn.strchars(before)
 end
 
+--- The links in a line of text, in order: { url =, start =, finish = } with byte columns (1-based, inclusive).
+--- Punctuation that ends a sentence is left out, and a closing bracket unless the link has its opening one.
+function M.urls(line)
+  local found, init = {}, 1
+  while true do
+    local start, finish = line:find("https?://[%w%-%._~:/%?#%[%]@!%$&'%(%)%*%+,;=%%]+", init)
+    if not start then
+      break
+    end
+    local url = line:sub(start, finish)
+    while true do
+      local last = url:sub(-1)
+      local strip = last:match '[%.,;:!%?\'"]'
+        or (last == ')' and select(2, url:gsub('%(', '')) < select(2, url:gsub('%)', '')))
+        or (last == ']' and select(2, url:gsub('%[', '')) < select(2, url:gsub('%]', '')))
+      if not strip then
+        break
+      end
+      url = url:sub(1, -2)
+    end
+    table.insert(found, { url = url, start = start, finish = start + #url - 1 })
+    init = finish + 1
+  end
+  return found
+end
+
+--- The link under the cursor of the current window, nil when there is none.
+function M.url_under_cursor()
+  local col = vim.api.nvim_win_get_cursor(0)[2] + 1
+  for _, u in ipairs(M.urls(vim.api.nvim_get_current_line())) do
+    if col >= u.start and col <= u.finish then
+      return u.url
+    end
+  end
+end
+
 return M

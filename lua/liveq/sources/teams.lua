@@ -5,7 +5,7 @@
 -- The picker lists chats (newest activity first, ● unread); `enter` opens a chat buffer, `alt-r` replies straight from
 -- the picker. In a chat buffer (`teams://NAME`, oldest message at the top, cursor on the newest):
 --   r / o   reply: a compose split below; `:w` sends it (after a confirmation), `:q!` drops it
---   R       reload          gx / ctrl-o   open the chat in Teams (browser)          q   close
+--   R       reload          gx   the link under the cursor, else the chat in Teams          ctrl-o   the chat in Teams          q   close
 -- Opening a chat marks it read, as opening it in Teams does. Auth: see the backend (o365_auth.py token-graph).
 
 local backend = vim.fs.normalize(vim.fs.joinpath(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)), '..', 'backends', 'teams.lua'))
@@ -160,7 +160,7 @@ function M.open_chat(source, id, title)
     map('R', function()
       M.load(source, buf)
     end, 'reload')
-    map('gx', browse, 'open in Teams')
+    require('liveq.show').map_gx(buf, browse) -- the link under the cursor, else the chat in Teams
     map('<C-o>', browse, 'open in Teams')
     map('q', function()
       vim.api.nvim_buf_delete(buf, { force = true })
