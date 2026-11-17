@@ -147,8 +147,8 @@ function M.search(source, query)
     require('liveq.buffer').open(source, last_query(opts))
   end
   if source.saved then
-    fzf_actions['ctrl-r'] = function()
-      M.saved(source)
+    fzf_actions['ctrl-r'] = function(_, opts)
+      M.saved(source, { back = last_query(opts) })
     end
     fzf_actions['ctrl-s'] = function(_, opts)
       local q = last_query(opts)
@@ -371,8 +371,10 @@ function M.resume(source)
   M.search(source, query)
 end
 
---- Picks a saved query (`<backend> saved -f tsv`: label, query, key, origin) and searches with it.
-function M.saved(source)
+--- Picks a saved query (`<backend> saved -f tsv`: label, query, key, origin) and searches with it. opts.back: the
+--- query of the search it was opened from (ctrl-r), which esc goes back to instead of closing.
+function M.saved(source, opts)
+  opts = opts or {}
   local ok, fzf = pcall(require, 'fzf-lua')
   if not ok then
     return
@@ -393,7 +395,16 @@ function M.saved(source)
   end
   fzf.fzf_exec(entries, {
     prompt = 'saved> ',
-    winopts = { title = ' Saved: ' .. source.title .. ' ', height = 0.4 },
+    -- the `hide` profile of fzf-lua replaces the esc action with hiding the picker, so without no_hide esc would not go
+    -- back to the search; esc is mapped in the window so that the `<Esc><Esc>` terminal mapping does not hold it back
+    no_hide = opts.back ~= nil,
+    winopts = {
+      title = ' Saved: ' .. source.title .. ' ',
+      height = 0.4,
+      on_create = opts.back and function(e)
+        vim.keymap.set('t', '<Esc>', '<Esc>', { buffer = e.bufnr, nowait = true })
+      end or nil,
+    },
     fzf_opts = { ['--ansi'] = true, ['--delimiter'] = '\t', ['--with-nth'] = '2,3' },
     actions = {
       ['enter'] = function(selected)
@@ -406,6 +417,9 @@ function M.saved(source)
           require('liveq.buffer').open(source, query_of(selected))
         end
       end,
+      ['esc'] = opts.back and function()
+        M.search(source, opts.back)
+      end or nil,
     },
   })
 end
