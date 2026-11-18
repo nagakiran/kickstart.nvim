@@ -13,7 +13,8 @@
 --
 -- The query, evaluated locally over the cache:
 --   words (each must be in the chat's name, members or messages; -word excludes, on name/members/last message only)
---   with:NAME (a member's name or address)   type:1:1|group|meeting (or the list's tags: grp|mtg|you)   is:unread   since:7d|2w|1M|2026-11-01 (last activity)
+--   with:NAME (a member's name or address)   type:1:1|group|meeting|calls (or the list's tags: grp|mtg|you|cal)   is:unread   since:7d|2w|1M|2026-11-01 (last activity)
+--   has:call (chats with a call; with on:, a call that day; the row shows its duration and the calls' total)
 --   on:DATE (a message that local day: 2026-11-05, 11-05, today, yesterday, 3d = three days ago; on:11-03..11-05 a range;
 --   with words, a message of those days must have the words not found in the name/members/last message)
 --
@@ -27,6 +28,12 @@
 -- Nothing is ever dropped: messages accumulate (LIVEQ_TEAMS_KEEP caps them per chat only when set), and a chat that
 -- falls out of the newest LIVEQ_TEAMS_MAX stays in the list, searchable, until it is active again. `refresh --deep`
 -- backfills older history. A chat found through a message shows that message in its row, and the preview opens at it.
+--
+-- Calls: a call started from a chat posts callStarted/callEnded events into it, the latter with the duration and the
+-- people; they are kept in the message cache and the index (`calls`) and shown in the chat. A call from the Calls app
+-- posts nothing into the chat; Teams logs every call in the hidden thread 48:calllogs, which Graph reads like 48:notes
+-- but strips to "Call Logs for Call <id>" and the end time. It is listed as the chat "Calls" (`type:calls`), each call
+-- joined by its id to the chat event that has its duration and people, when there is one.
 --
 -- Auth: a Graph token (Chat.ReadWrite, User.Read) printed by LIVEQ_TEAMS_TOKEN_CMD, by default
 -- `~/.venvs/mail/bin/python ~/rcfiles/bin/mail/o365_auth.py token-graph $LIVEQ_TEAMS_ACCOUNT` (account defaulting to
@@ -56,11 +63,27 @@ local TYPES = {
   self = 'self',
   notes = 'self',
   you = 'self',
+  calls = 'calls',
+  call = 'calls',
+  cal = 'calls',
 }
-local TYPE_TAG = { oneOnOne = '\27[32m1:1\27[0m', group = '\27[34mgrp\27[0m', meeting = '\27[35mmtg\27[0m', self = '\27[33myou\27[0m' }
+local TYPE_TAG = {
+  oneOnOne = '\27[32m1:1\27[0m',
+  group = '\27[34mgrp\27[0m',
+  meeting = '\27[35mmtg\27[0m',
+  self = '\27[33myou\27[0m',
+  calls = '\27[36mcal\27[0m',
+}
 -- The self chat ("notes to self") is not in /me/chats and /chats/48:notes is refused ("not a ChatThread"), but its
 -- messages are readable at /chats/48:notes/messages: fetch() adds it to the list from its newest message.
 local SELF_CHAT = '48:notes'
+local CALL_LOG = '48:calllogs'
+-- the chats that are not in /me/chats, added to the list from their newest message
+local PSEUDO = {
+  { id = SELF_CHAT, topic = 'Notes (you)', chatType = 'self', webUrl = 'https://teams.microsoft.com/l/chat/48:notes/0' },
+  -- the Calls app
+  { id = CALL_LOG, topic = 'Calls', chatType = 'calls', webUrl = 'https://teams.microsoft.com/l/app/20c3440d-c67e-4420-9f80-0e50c39693df' },
+}
 local SCRIPT = debug.getinfo(1, 'S').source:sub(2)
 local INDEX = CACHE .. '/index.json'
 local KEEP = tonumber(os.getenv 'LIVEQ_TEAMS_KEEP') -- nil: keep every message
@@ -167,6 +190,32 @@ end
 local function long_time(iso)
   local t = epoch(iso)
   return t and os.date('%a %b %d %H:%M', t) or ''
+end
+
+--- Seconds of an ISO 8601 duration (`PT1H9M3.52S`), or nil.
+local function duration_secs(iso)
+  if type(iso) ~= 'string' or not iso:match '^P' then
+    return nil
+  end
+  local secs = tonumber(iso:match '^P(%d+)D' or 0) * DAY
+  for n, unit in (iso:match 'T(.*)$' or ''):gmatch '([%d.]+)([HMS])' do
+    secs = secs + tonumber(n) * ({ H = 3600, M = 60, S = 1 })[unit]
+  end
+  return math.floor(secs + 0.5)
+end
+
+--- A duration as Teams shows it: 1h 9m, 8m 12s, 1s; `?` when unknown.
+local function fmt_duration(secs)
+  if not secs then
+    return '?'
+  end
+  local h, m, s = math.floor(secs / 3600), math.floor(secs % 3600 / 60), secs % 60
+  if h > 0 then
+    return ('%dh %dm'):format(h, m)
+  elseif m > 0 then
+    return s > 0 and ('%dm %ds'):format(m, s) or (m .. 'm')
+  end
+  return s .. 's'
 end
 
 local function since(value)
@@ -444,8 +493,8 @@ local function chat_name(chat, my_id)
 end
 
 local function unread(chat, my_id)
-  if chat.id == SELF_CHAT then
-    return false -- only you write there
+  if chat.id == SELF_CHAT or chat.id == CALL_LOG then
+    return false -- only you write there; the call log has no read state
   end
   local last = chat.preview and epoch(chat.preview.at)
   -- a call or membership event as the last item does not make a chat unread in Teams either
@@ -466,7 +515,26 @@ local function by_time_desc(a, b)
   return (epoch(a.at) or 0) > (epoch(b.at) or 0)
 end
 
+--- The call of a callStarted/callEnded event: its id, and for an end the duration (secs) and the people (with).
+local function call_info(detail)
+  local kind = detail and detail['@odata.type']
+  local by = detail and vim.tbl_get(detail, 'initiator', 'user', 'id')
+  if kind == '#microsoft.graph.callEndedEventMessageDetail' then
+    local with = {}
+    for _, p in ipairs(detail.callParticipants or {}) do
+      local u = vim.tbl_get(p, 'participant', 'user') or {}
+      table.insert(with, { n = u.displayName, u = u.id })
+    end
+    return { id = detail.callId, secs = duration_secs(detail.callDuration), with = with, by = by, kind = detail.callEventType }
+  elseif kind == '#microsoft.graph.callStartedEventMessageDetail' then
+    return { id = detail.callId, started = true, by = by, kind = detail.callEventType }
+  end
+end
+
 local function trim_message(m)
+  local text = body_text(m.body, m.attachments)
+  -- an entry of the call log: Graph leaves only the call's id (and the time it ended)
+  local logged = m.chatId == CALL_LOG and text:match 'Call Logs for Call (%S+)'
   return {
     id = m.id,
     at = m.createdDateTime,
@@ -474,10 +542,11 @@ local function trim_message(m)
     deleted = m.deletedDateTime,
     from = vim.tbl_get(m, 'from', 'user', 'displayName') or vim.tbl_get(m, 'from', 'application', 'displayName'),
     fromId = vim.tbl_get(m, 'from', 'user', 'id'),
-    type = m.messageType,
+    type = logged and 'calllog' or m.messageType,
     event = m.eventDetail and m.eventDetail['@odata.type'],
+    call = logged and { id = logged } or call_info(m.eventDetail),
     subject = m.subject,
-    text = body_text(m.body, m.attachments),
+    text = text,
     reactions = vim.tbl_map(function(r)
       return r.displayName or r.reactionType
     end, m.reactions or {}),
@@ -489,17 +558,22 @@ local function message_file(chat_id)
 end
 
 --- The searchable part of a chat's messages (newest first): real messages, one line each, quotes dropped.
+--- Also the chat's ended calls, newest first: id, end time, duration and people (none of these for an event cached
+--- before calls were kept, which a refresh of the chat fills in).
 local function index_entry(list)
-  local msgs = {}
+  local msgs, calls = {}, {}
   for _, m in ipairs(list) do
     if m.type == 'message' and not m.deleted then
       local text = one_line(m.text)
       if text ~= '' then
         table.insert(msgs, { id = m.id, at = m.at, from = m.from, fromId = m.fromId, text = text })
       end
+    elseif m.event == '#microsoft.graph.callEndedEventMessageDetail' then
+      local c = m.call or {}
+      table.insert(calls, { id = c.id, at = m.at, secs = c.secs, with = c.with, kind = c.kind })
     end
   end
-  return { newest = list[1] and list[1].id, messages = msgs }
+  return { newest = list[1] and list[1].id, messages = msgs, calls = calls }
 end
 
 --- Replaces the index entries of some chats, re-reading the index first so that concurrent writers lose nothing.
@@ -573,6 +647,7 @@ local function fetch()
             fromId = vim.tbl_get(p, 'from', 'user', 'id'),
             text = one_line(body_text(p.body)),
             event = p.messageType ~= 'message' or nil,
+            call = call_info(p.eventDetail),
           } or nil,
           -- members are kept from the last fetch while the chat itself has not changed
           members = prior and prior.updated == c.lastUpdatedDateTime and prior.members or nil,
@@ -582,29 +657,27 @@ local function fetch()
     url = page['@odata.nextLink']
   end
 
-  -- the self chat, placed by its last message among the others (newest activity first)
-  local notes = api('GET', '/chats/' .. SELF_CHAT .. '/messages?$top=1')
-  local top = notes and notes.value and notes.value[1]
-  if top then
-    local m = trim_message(top)
-    local self_chat = {
-      id = SELF_CHAT,
-      topic = 'Notes (you)',
-      chatType = 'self',
-      webUrl = 'https://teams.microsoft.com/l/chat/48:notes/0',
-      updated = m.at,
-      members = {},
-      preview = { id = m.id, at = m.at, from = m.from, fromId = m.fromId, text = one_line(m.text), event = m.type ~= 'message' or nil },
-    }
-    local at, pos = epoch(m.at) or 0, #chats + 1
-    for i, c in ipairs(chats) do
-      if (epoch(c.preview and c.preview.at or c.updated) or 0) < at then
-        pos = i
-        break
+  -- the self chat and the call log, each placed by its last message among the others (newest activity first)
+  for _, pseudo in ipairs(PSEUDO) do
+    local newest = api('GET', '/chats/' .. pseudo.id .. '/messages?$top=1')
+    local top = newest and newest.value and newest.value[1]
+    if top then
+      local m = trim_message(top)
+      local chat = vim.tbl_extend('force', pseudo, {
+        updated = m.at,
+        members = {},
+        preview = { id = m.id, at = m.at, from = m.from, fromId = m.fromId, text = one_line(m.text), event = m.type ~= 'message' or nil, call = m.call },
+      })
+      local at, pos = epoch(m.at) or 0, #chats + 1
+      for i, c in ipairs(chats) do
+        if (epoch(c.preview and c.preview.at or c.updated) or 0) < at then
+          pos = i
+          break
+        end
       end
+      table.insert(chats, pos, chat)
+      seen_ids[pseudo.id] = true
     end
-    table.insert(chats, pos, self_chat)
-    seen_ids[SELF_CHAT] = true
   end
 
   -- chats beyond the newest MAX_CHATS stay, as they were last seen, so their messages remain searchable (a hidden
@@ -640,7 +713,8 @@ local function fetch()
   -- the latest messages of the chats whose last message is not in the index yet, for searching message text
   local index = read_json(INDEX) or {}
   local stale = vim.tbl_filter(function(c)
-    return c.preview and c.preview.id and (index[c.id] or {}).newest ~= c.preview.id
+    local entry = index[c.id] or {}
+    return c.preview and c.preview.id and (entry.newest ~= c.preview.id or entry.calls == nil)
   end, chats)
   local entries = {}
   for i = 1, #stale, 20 do
@@ -820,6 +894,8 @@ local function plan(query)
       p.type_negated = negated
     elseif key == 'is' and value == 'unread' then
       p.unread = not negated
+    elseif key == 'has' and (value == 'call' or value == 'calls') then
+      p.call = not negated
     elseif key == 'since' then
       p.since = since(value)
     elseif key == 'on' then
@@ -846,9 +922,37 @@ local function matches(c, p, my_id, index)
   if p.since and (epoch(c.preview and c.preview.at or c.updated) or 0) < p.since then
     return false
   end
-  -- `on:`: the chat's messages of those days (from the index); its last activity bounds them
+  -- `has:call`: the chat's ended calls (of the days of `on:`, when given); the row shows the newest and the total
+  local call_hit
+  if p.call ~= nil then
+    local calls, total, unknown = {}, 0, false
+    for _, k in ipairs(index and index[c.id] and index[c.id].calls or {}) do
+      local t = epoch(k.at)
+      if not p.on or (t and t >= p.on[1] and t < p.on[2]) then
+        table.insert(calls, k)
+        total = total + (k.secs or 0)
+        unknown = unknown or k.secs == nil
+      end
+    end
+    if (#calls > 0) ~= p.call then
+      return false
+    end
+    if p.call then
+      local newest = calls[1]
+      call_hit = {
+        at = newest.at,
+        line = ('%s call %s%s'):format(
+          short_time(newest.at),
+          fmt_duration(newest.secs),
+          #calls > 1 and (' · %d calls, %s%s in all'):format(#calls, unknown and '≥' or '', fmt_duration(total)) or ''
+        ),
+      }
+    end
+  end
+  -- `on:`: the chat's messages of those days (from the index); its last activity bounds them. With `has:call` the
+  -- days apply to the calls instead.
   local day_msgs
-  if p.on then
+  if p.on and not p.call then
     if (epoch(c.preview and c.preview.at or c.updated) or 0) < p.on[1] then
       return false
     end
@@ -886,7 +990,7 @@ local function matches(c, p, my_id, index)
     end
   end
   if #missing == 0 then
-    return true, day_msgs and day_msgs[1] -- with `on:`, the row shows the newest message of those days
+    return true, call_hit or (day_msgs and day_msgs[1]) -- with `on:`, the row shows the newest message of those days
   end
   local found, best, best_n = {}, nil, 0
   for _, m in ipairs(day_msgs or index and index[c.id] and index[c.id].messages or {}) do
@@ -1023,7 +1127,7 @@ local function search(opts, rest)
   end
   local my_id = data.me
   local p = plan(query)
-  local index = (#p.words > 0 or p.on) and read_json(INDEX) or nil
+  local index = (#p.words > 0 or p.on or p.call ~= nil) and read_json(INDEX) or nil
   local found, hits = {}, {}
   local remote = server_hits(p.words)
   local loose = remote and vim.tbl_extend('force', p, { words = {} }) -- the query's other filters still apply
@@ -1044,7 +1148,7 @@ local function search(opts, rest)
   end, data.chats)
   if query == '' then
     out(
-      ('\t\27[2m%d chats, %d unread (cache %s%s). Filter: words with: type:1:1|group|meeting is:unread since:7d on:11-05   enter: open chat  ctrl-r: refresh\27[0m\t\t'):format(
+      ('\t\27[2m%d chats, %d unread (cache %s%s). Filter: words with: type:1:1|group|meeting|calls is:unread has:call since:7d on:11-05   enter: open chat  ctrl-r: refresh\27[0m\t\t'):format(
         #data.chats,
         unread_count,
         age(data.at),
@@ -1067,8 +1171,15 @@ local function search(opts, rest)
     local pv = c.preview or {}
     local who = pv.fromId == my_id and 'you' or (pv.from or ''):match '^[^,%s]+' or ''
     local last = pv.event and '\27[2m(event)\27[0m' or ('\27[2m' .. (who ~= '' and (who .. ': ') or '') .. clean(pv.text) .. '\27[0m')
+    if c.id == CALL_LOG then
+      last = '\27[2m(last call ended ' .. short_time(pv.at) .. ')\27[0m'
+    elseif pv.call then
+      last = '\27[2m(' .. (pv.call.started and 'call started' or ('call ' .. fmt_duration(pv.call.secs))) .. ')\27[0m'
+    end
     local hit = hits[c.id]
-    if hit then
+    if hit and hit.line then
+      last = '\27[2m↳ ' .. hit.line .. '\27[0m'
+    elseif hit then
       -- found in a message other than the last one: show that message, with its own time
       local by = hit.fromId == my_id and 'you' or (hit.from or ''):match '^[^,%s]+' or ''
       local text = highlight(clean(excerpt(hit.text, p.words)), p.words, '\27[2m')
@@ -1121,7 +1232,8 @@ local function messages(chat, count, fresh, any_cached)
     local data = read_json(CHATS)
     for _, c in ipairs(data and data.chats or {}) do
       if c.id == chat.id then
-        c.preview = { id = top.id, at = top.at, from = top.from, fromId = top.fromId, text = one_line(top.text), event = top.type ~= 'message' or nil }
+        c.preview =
+          { id = top.id, at = top.at, from = top.from, fromId = top.fromId, text = one_line(top.text), event = top.type ~= 'message' or nil, call = top.call }
         write_json(CHATS, data)
         break
       end
@@ -1177,6 +1289,34 @@ local function show(opts, rest)
   local lines = {}
   local in_range = {} -- with `on:`, the entries of `lines` that belong to a message of those days
   local name = chat_name(chat, my_id)
+  -- the call log: each call joined by its id to the chat event that has its duration and people
+  local known, day_of = {}, nil
+  if chat.id == CALL_LOG then
+    local by_id = {}
+    for _, c in ipairs(data.chats or {}) do
+      by_id[c.id] = c
+    end
+    for chat_id, entry in pairs(read_json(INDEX) or {}) do
+      for _, k in ipairs(type(entry) == 'table' and entry.calls or {}) do
+        if k.id then
+          known[k.id] = vim.tbl_extend('force', k, { chat = by_id[chat_id] })
+        end
+      end
+    end
+  end
+  --- The people of a call other than you, else the chat's name.
+  local function call_people(with, c)
+    local names = {}
+    for _, w in ipairs(with or {}) do
+      if w.u ~= my_id and w.n and w.n ~= '' then
+        table.insert(names, w.n)
+      end
+    end
+    if #names == 0 then
+      return c and chat_name(c, my_id) or ''
+    end
+    return table.concat(vim.list_slice(names, 1, 3), '; ') .. (#names > 3 and (' +' .. (#names - 3)) or '')
+  end
   if plain then
     vim.list_extend(lines, { '# ' .. name, '' })
     local names = member_names(chat, my_id)
@@ -1189,11 +1329,49 @@ local function show(opts, rest)
     table.insert(lines, '\27[1m' .. name .. '\27[0m  \27[2m' .. (chat.chatType or '') .. ', newest first\27[0m')
     table.insert(lines, '')
   end
+  if chat.id == CALL_LOG then
+    local note = 'When each call ended. Duration and people only for calls that also posted to a chat; Graph gives the rest no detail.'
+    vim.list_extend(lines, { plain and ('_' .. note .. '_') or ('\27[2m' .. note .. '\27[0m'), '' })
+  end
   for _, m in ipairs(list) do
     local who = m.fromId == my_id and 'You' or (m.from or '?')
     local t = on and epoch(m.at)
     local first = #lines + 1
-    if m.type ~= 'message' then
+    if m.type == 'calllog' then
+      local et = epoch(m.at)
+      local day = et and os.date('%a %b %d', et) or ''
+      if day ~= day_of then
+        if day_of then
+          table.insert(lines, '')
+        end
+        day_of = day
+        table.insert(lines, plain and ('## ' .. day) or ('\27[1m' .. day .. '\27[0m'))
+      end
+      local k = known[m.call and m.call.id or '']
+      local time = et and os.date('%H:%M', et) or ''
+      if k then
+        local who = call_people(k.with, k.chat)
+        local dur = fmt_duration(k.secs)
+        table.insert(lines, plain and ('- %s · %s · %s'):format(time, dur, who) or ('  %s  %-8s %s'):format(time, dur, who))
+      else
+        table.insert(lines, plain and ('- %s · ?'):format(time) or ('  %s  \27[2m?\27[0m'):format(time))
+      end
+    elseif m.type ~= 'message' and m.call and not m.call.started then
+      local who = call_people(m.call.with)
+      local what = 'call · ' .. fmt_duration(m.call.secs) .. (chat.chatType ~= 'oneOnOne' and who ~= '' and (' · ' .. who) or '')
+      table.insert(
+        lines,
+        plain and ('_— ' .. what .. ' · ' .. long_time(m.at) .. ' —_') or ('\27[36m— ' .. what .. ' · ' .. long_time(m.at) .. ' —\27[0m')
+      )
+      table.insert(lines, '')
+    elseif m.type ~= 'message' and m.call then
+      local what = 'call started' .. (m.call.by == my_id and ' by you' or '')
+      table.insert(
+        lines,
+        plain and ('_— ' .. what .. ' · ' .. long_time(m.at) .. ' —_') or ('\27[2m— ' .. what .. ' · ' .. long_time(m.at) .. ' —\27[0m')
+      )
+      table.insert(lines, '')
+    elseif m.type ~= 'message' then
       local what = (m.event or m.type or 'event'):gsub('^#microsoft%.graph%.', ''):gsub('EventMessageDetail$', '')
       table.insert(
         lines,
@@ -1313,6 +1491,9 @@ local function send(opts, rest)
   else
     text = table.concat(vim.list_slice(rest, 2), ' ')
   end
+  if id == CALL_LOG then
+    fail 'send: the call log is read-only'
+  end
   text = vim.trim(text or '')
   if text == '' then
     fail 'send: the message is empty'
@@ -1330,8 +1511,8 @@ local function read(_, rest)
   if not id or not id:match '^%d+:' then
     fail 'read: no chat id'
   end
-  if id == SELF_CHAT then
-    return -- it has no read state (markChatReadForUser refuses it), and is never unread
+  if id == SELF_CHAT or id == CALL_LOG then
+    return -- no read state (markChatReadForUser refuses them), and never unread
   end
   local my_id, tenant = me()
   if not my_id then
@@ -1356,8 +1537,9 @@ end
 
 local PREFIXES = {
   { 'with:', "a member's name or address" },
-  { 'type:', '1:1, group, meeting or self' },
+  { 'type:', '1:1, group, meeting, self or calls (the call log)' },
   { 'is:unread', 'chats with unread messages' },
+  { 'has:call', 'chats with a call (with on:, a call those days); shows its duration' },
   { 'since:', 'last activity since: 1d, 7d, 2w, 1M or a date' },
   { 'on:', 'messages on a day: today, yesterday, 3d (ago), 11-05, 2026-11-05, or A..B' },
 }
@@ -1410,7 +1592,7 @@ local function complete(opts, rest)
   elseif key == 'type' or key == 'since' or key == 'is' or key == 'on' then
     context = 'value'
     local values = ({
-      type = { '1:1', 'group', 'meeting', 'self' },
+      type = { '1:1', 'group', 'meeting', 'self', 'calls' },
       since = { '1d', '7d', '2w', '1M', '3M' },
       is = { 'unread' },
       on = { 'today', 'yesterday', os.date('%m-%d', os.time() - 2 * DAY) },
