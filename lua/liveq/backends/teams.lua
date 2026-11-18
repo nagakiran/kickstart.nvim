@@ -10,6 +10,7 @@
 --   nvim -l teams.lua read -- CHAT_ID                      mark the chat read, as opening it in Teams does
 --   nvim -l teams.lua show --match QUERY -- CHAT_ID         the preview, with the query's words highlighted
 --   nvim -l teams.lua terms -- QUERY                       the query's words, as JSON (for liveq's n/N)
+--   nvim -l teams.lua calls                                re-read the Teams desktop app's call log (macOS)
 --
 -- The query, evaluated locally over the cache:
 --   words (each must be in the chat's name, members or messages; -word excludes, on name/members/last message only)
@@ -34,6 +35,14 @@
 -- posts nothing into the chat; Teams logs every call in the hidden thread 48:calllogs, which Graph reads like 48:notes
 -- but strips to "Call Logs for Call <id>" and the end time. It is listed as the chat "Calls" (`type:calls`), each call
 -- joined by its id to the chat event that has its duration and people, when there is one.
+--
+-- On macOS the Teams desktop app (new Teams) caches the whole call log in its IndexedDB: start, answer and end times,
+-- direction, missed or not, the people. teams_calls.py reads it (read-only, standard-library Python) into calls.json in
+-- the cache, merged with what it held, so calls the app forgets stay. Then the "Calls" chat shows every call with its
+-- start, direction and duration and each day's total, a chat shows its calls inline (a 1:1 by the other person, a
+-- group call by its thread), and has:call counts them. A refresh re-reads it (about 4s) only when Graph's log has a
+-- call it lacks; `nvim -l teams.lua calls` re-reads it now. LIVEQ_TEAMS_DESKTOP_DB names the app's LevelDB directory
+-- ('' turns this off); without the app or python3 everything above still works from Graph alone.
 --
 -- Auth: a Graph token (Chat.ReadWrite, User.Read) printed by LIVEQ_TEAMS_TOKEN_CMD, by default
 -- `~/.venvs/mail/bin/python ~/rcfiles/bin/mail/o365_auth.py token-graph $LIVEQ_TEAMS_ACCOUNT` (account defaulting to
@@ -85,6 +94,13 @@ local PSEUDO = {
   { id = CALL_LOG, topic = 'Calls', chatType = 'calls', webUrl = 'https://teams.microsoft.com/l/app/20c3440d-c67e-4420-9f80-0e50c39693df' },
 }
 local SCRIPT = debug.getinfo(1, 'S').source:sub(2)
+local DESKTOP_DB = os.getenv 'LIVEQ_TEAMS_DESKTOP_DB'
+  or (
+    HOME
+    .. '/Library/Containers/com.microsoft.teams2/Data/Library/Application Support/Microsoft/MSTeams/EBWebView/WV2Profile_tfw/IndexedDB/https_teams.microsoft.com_0.indexeddb.leveldb'
+  )
+local CALLS_READER = vim.fs.dirname(SCRIPT) .. '/teams_calls.py'
+local LOCAL_CALLS = CACHE .. '/calls.json'
 local INDEX = CACHE .. '/index.json'
 local KEEP = tonumber(os.getenv 'LIVEQ_TEAMS_KEEP') -- nil: keep every message
 local DEEP = 300 -- messages per chat that `refresh --deep` backfills to, unless given
@@ -613,6 +629,75 @@ local function store_messages(chat_id, fetched, complete, defer_index)
   return kept, entry
 end
 
+--- Reads the desktop app's call log (teams_calls.py) into LOCAL_CALLS, merged with what it held: the app drops old
+--- calls in time. nil, quietly, without the app's directory or python3.
+local function sync_local_calls()
+  if DESKTOP_DB == '' or not vim.uv.fs_stat(DESKTOP_DB) or vim.fn.executable 'python3' ~= 1 then
+    return nil
+  end
+  local result = vim.system({ 'python3', '-I', CALLS_READER, DESKTOP_DB }, { text = true }):wait(120000)
+  local ok, list = pcall(vim.json.decode, result.code == 0 and result.stdout or '', { luanil = { object = true, array = true } })
+  if not ok or type(list) ~= 'table' then
+    return nil
+  end
+  local held = (read_json(LOCAL_CALLS) or {}).calls or {}
+  for _, c in ipairs(list) do
+    held[c.id] = c
+  end
+  local data = { at = os.time(), calls = held }
+  write_json(LOCAL_CALLS, data)
+  return data
+end
+
+--- The desktop app's calls (from LOCAL_CALLS), newest first, and by id: id, at (start), ended, secs (answered to end;
+--- nil for a missed call), dir, state, kind, with (the people other than you, named from the chats' members when the
+--- log has no name) and chat (the group call's thread, or the 1:1 chat with the one other person).
+local function desktop_calls(data)
+  local file = read_json(LOCAL_CALLS)
+  if not file or not file.calls then
+    return {}, {}
+  end
+  local my_id = data and data.me
+  local names, one_on_one = {}, {}
+  for _, c in ipairs(data and data.chats or {}) do
+    for _, m in ipairs(c.members or {}) do
+      if m.u and m.n and m.n ~= '' then
+        names[m.u] = names[m.u] or m.n
+      end
+      if c.chatType == 'oneOnOne' and m.u and m.u ~= my_id then
+        one_on_one[m.u] = one_on_one[m.u] or c.id
+      end
+    end
+  end
+  local list, by_id = {}, {}
+  for id, k in pairs(file.calls) do
+    local with = {}
+    for _, p in ipairs(k.people or {}) do
+      if not p.u or p.u ~= my_id then
+        table.insert(with, { u = p.u, n = p.n or (p.u and names[p.u]) })
+      end
+    end
+    local connect, stop = epoch(k.connect), epoch(k['end'])
+    local rec = {
+      id = id,
+      at = k.start or k['end'],
+      ended = k['end'] or k.start,
+      secs = connect and stop and k.state ~= 'missed' and math.floor(stop - connect) or nil, -- as Teams shows it: whole seconds, not rounded
+      dir = k.dir,
+      state = k.state,
+      kind = k.type,
+      with = with,
+      chat = k.thread or (#with == 1 and with[1].u and one_on_one[with[1].u]) or nil,
+    }
+    table.insert(list, rec)
+    by_id[id] = rec
+  end
+  table.sort(list, by_time_desc)
+  return list, by_id
+end
+
+local CALL_ARROW = { incoming = '←', outgoing = '→' }
+
 --- Fetches the chat list, newest activity first, then the members of the chats that changed (in $batch requests of
 --- 20, since expanding members inline costs seconds per meeting chat). Writes the cache and returns it.
 local function fetch()
@@ -761,6 +846,19 @@ local function fetch()
   local my_id, tenant = me()
   local data = { at = os.time(), me = my_id, tenant = tenant, chats = chats }
   write_json(CHATS, data)
+
+  -- the desktop app's call log: read once, then again when Graph's log has a call it lacks (at most every 5 minutes,
+  -- as the app may not have it yet, or not be running)
+  local newest_call
+  for _, c in ipairs(chats) do
+    if c.id == CALL_LOG then
+      newest_call = vim.tbl_get(c, 'preview', 'call', 'id')
+    end
+  end
+  local held = read_json(LOCAL_CALLS)
+  if not held or (newest_call and not (held.calls or {})[newest_call] and os.time() - (held.at or 0) > 300) then
+    sync_local_calls()
+  end
   return data
 end
 
@@ -1128,6 +1226,31 @@ local function search(opts, rest)
   local my_id = data.me
   local p = plan(query)
   local index = (#p.words > 0 or p.on or p.call ~= nil) and read_json(INDEX) or nil
+  if p.call ~= nil and index then
+    -- the desktop app's answered calls join the chats' own call events (the same call has the same id in both)
+    local extra = {}
+    for _, rec in ipairs((desktop_calls(data))) do
+      if rec.chat and rec.secs then
+        extra[rec.chat] = extra[rec.chat] or {}
+        table.insert(extra[rec.chat], { id = rec.id, at = rec.ended, secs = rec.secs, with = rec.with })
+      end
+    end
+    for chat_id, calls in pairs(extra) do
+      local entry = index[chat_id] or {}
+      local have, merged = {}, {}
+      for _, k in ipairs(entry.calls or {}) do
+        have[k.id or ''] = true
+        table.insert(merged, k)
+      end
+      for _, k in ipairs(calls) do
+        if not have[k.id] then
+          table.insert(merged, k)
+        end
+      end
+      table.sort(merged, by_time_desc)
+      index[chat_id] = vim.tbl_extend('force', entry, { calls = merged })
+    end
+  end
   local found, hits = {}, {}
   local remote = server_hits(p.words)
   local loose = remote and vim.tbl_extend('force', p, { words = {} }) -- the query's other filters still apply
@@ -1172,7 +1295,20 @@ local function search(opts, rest)
     local who = pv.fromId == my_id and 'you' or (pv.from or ''):match '^[^,%s]+' or ''
     local last = pv.event and '\27[2m(event)\27[0m' or ('\27[2m' .. (who ~= '' and (who .. ': ') or '') .. clean(pv.text) .. '\27[0m')
     if c.id == CALL_LOG then
-      last = '\27[2m(last call ended ' .. short_time(pv.at) .. ')\27[0m'
+      local newest = (desktop_calls(data))[1]
+      if newest then
+        local names = vim.tbl_map(function(w)
+          return w.n or '?'
+        end, vim.list_slice(newest.with, 1, 2))
+        last = ('\27[2m(%s %s %s %s)\27[0m'):format(
+          short_time(newest.at),
+          CALL_ARROW[newest.dir] or '',
+          table.concat(names, '; ') .. (#newest.with > 2 and (' +' .. (#newest.with - 2)) or ''),
+          newest.secs and fmt_duration(newest.secs) or 'missed'
+        )
+      else
+        last = '\27[2m(last call ended ' .. short_time(pv.at) .. ')\27[0m'
+      end
     elseif pv.call then
       last = '\27[2m(' .. (pv.call.started and 'call started' or ('call ' .. fmt_duration(pv.call.secs))) .. ')\27[0m'
     end
@@ -1278,10 +1414,55 @@ local function show(opts, rest)
   local q = opts.match and plan(opts.match) or {}
   local words, on = q.words or {}, q.on
   local searching = #words > 0 or on ~= nil
-  local list, err = messages(chat, tonumber(opts.count) or ((plain or searching) and (searching and 100000 or 100) or 30), opts.fresh, searching)
+  local want = tonumber(opts.count) or (searching and 100000) or (chat.id == CALL_LOG and 300) or (plain and 100) or 30
+  -- the call log's older entries come from the desktop app's cache, when there is one, so Graph's newest 50 do
+  local list, err = messages(chat, chat.id == CALL_LOG and math.min(want, 50) or want, opts.fresh, searching)
   if not list then
     out((plain and '' or '\27[31m') .. 'Cannot fetch the messages: ' .. err .. (plain and '' or '\27[0m'))
     return
+  end
+  local desktop, desktop_by_id, all_calls = {}, {}, nil
+  if chat.chatType ~= 'self' then
+    desktop, desktop_by_id = desktop_calls(data)
+  end
+  if chat.id == CALL_LOG and #desktop > 0 then
+    -- every call the app holds, and those of Graph's log it does not
+    local merged = {}
+    for _, rec in ipairs(desktop) do
+      table.insert(merged, { id = rec.id, type = 'calllog', at = rec.at, call = { id = rec.id }, rec = rec })
+    end
+    for _, m in ipairs(list) do
+      if not (m.call and desktop_by_id[m.call.id]) then
+        table.insert(merged, m)
+      end
+    end
+    table.sort(merged, by_time_desc)
+    all_calls = merged -- a day's total counts all its calls, not just those shown
+    list = vim.list_slice(merged, 1, want)
+  elseif #desktop > 0 then
+    -- the chat's calls the app logged but the chat has no event for (a call from the Calls app), within the messages
+    local present, added = {}, false
+    for _, m in ipairs(list) do
+      if m.call and m.call.id then
+        present[m.call.id] = true
+      end
+    end
+    local oldest = #list > 0 and epoch(list[#list].at) or 0
+    for _, rec in ipairs(desktop) do
+      if rec.chat == chat.id and not present[rec.id] and (epoch(rec.ended) or 0) >= oldest then
+        table.insert(list, {
+          id = 'call:' .. rec.id,
+          type = 'event',
+          event = '#microsoft.graph.callEndedEventMessageDetail',
+          at = rec.ended,
+          call = { id = rec.id, secs = rec.secs, with = rec.with, missed = rec.secs == nil },
+        })
+        added = true
+      end
+    end
+    if added then
+      table.sort(list, by_time_desc)
+    end
   end
   if opts.chronological then
     list = vim.fn.reverse(list)
@@ -1290,18 +1471,27 @@ local function show(opts, rest)
   local in_range = {} -- with `on:`, the entries of `lines` that belong to a message of those days
   local name = chat_name(chat, my_id)
   -- the call log: each call joined by its id to the chat event that has its duration and people
-  local known, day_of = {}, nil
+  local known, day_of, chat_by_id, day_totals = {}, nil, {}, {}
   if chat.id == CALL_LOG then
-    local by_id = {}
     for _, c in ipairs(data.chats or {}) do
-      by_id[c.id] = c
+      chat_by_id[c.id] = c
     end
     for chat_id, entry in pairs(read_json(INDEX) or {}) do
       for _, k in ipairs(type(entry) == 'table' and entry.calls or {}) do
         if k.id then
-          known[k.id] = vim.tbl_extend('force', k, { chat = by_id[chat_id] })
+          known[k.id] = vim.tbl_extend('force', k, { chat = chat_id })
         end
       end
+    end
+    -- per day: the calls and the time on them (answered calls of known duration)
+    for _, m in ipairs(all_calls or list) do
+      local t = epoch(m.at)
+      local day = t and os.date('%a %b %d', t) or ''
+      local k = m.rec or known[m.call and m.call.id or '']
+      local d = day_totals[day] or { n = 0, secs = 0 }
+      d.n = d.n + 1
+      d.secs = d.secs + (k and k.secs or 0)
+      day_totals[day] = d
     end
   end
   --- The people of a call other than you, else the chat's name.
@@ -1330,7 +1520,9 @@ local function show(opts, rest)
     table.insert(lines, '')
   end
   if chat.id == CALL_LOG then
-    local note = 'When each call ended. Duration and people only for calls that also posted to a chat; Graph gives the rest no detail.'
+    local note = #desktop > 0
+        and "When each call started, → outgoing, ← incoming, and how long it lasted: from the Teams app's cache on this Mac. A day's total counts answered calls."
+      or 'When each call ended. Duration and people only for calls that also posted to a chat; Graph gives the rest no detail.'
     vim.list_extend(lines, { plain and ('_' .. note .. '_') or ('\27[2m' .. note .. '\27[0m'), '' })
   end
   for _, m in ipairs(list) do
@@ -1345,20 +1537,31 @@ local function show(opts, rest)
           table.insert(lines, '')
         end
         day_of = day
-        table.insert(lines, plain and ('## ' .. day) or ('\27[1m' .. day .. '\27[0m'))
+        local d = day_totals[day] or { n = 0, secs = 0 }
+        local sum = (' · %d call%s · %s'):format(d.n, d.n == 1 and '' or 's', fmt_duration(d.secs))
+        table.insert(lines, plain and ('## ' .. day .. sum) or ('\27[1m' .. day .. '\27[0m\27[2m' .. sum .. '\27[0m'))
       end
-      local k = known[m.call and m.call.id or '']
+      local k = m.rec or known[m.call and m.call.id or '']
       local time = et and os.date('%H:%M', et) or ''
       if k then
-        local who = call_people(k.with, k.chat)
-        local dur = fmt_duration(k.secs)
-        table.insert(lines, plain and ('- %s · %s · %s'):format(time, dur, who) or ('  %s  %-8s %s'):format(time, dur, who))
+        local who = call_people(k.with, chat_by_id[k.chat])
+        local missed = k.state == 'missed'
+        local dur = missed and 'missed' or fmt_duration(k.secs)
+        local arrow = CALL_ARROW[k.dir] or ' '
+        table.insert(
+          lines,
+          plain and ('- %s %s %s · %s'):format(time, arrow, dur, who) or ('  %s %s %s%-8s\27[0m %s'):format(time, arrow, missed and '\27[31m' or '', dur, who)
+        )
       else
         table.insert(lines, plain and ('- %s · ?'):format(time) or ('  %s  \27[2m?\27[0m'):format(time))
       end
     elseif m.type ~= 'message' and m.call and not m.call.started then
       local who = call_people(m.call.with)
-      local what = 'call · ' .. fmt_duration(m.call.secs) .. (chat.chatType ~= 'oneOnOne' and who ~= '' and (' · ' .. who) or '')
+      local rec = desktop_by_id[m.call.id]
+      local dir = rec and ({ incoming = ' ←', outgoing = ' →' })[rec.dir] or ''
+      local what = (m.call.missed and 'missed call' or ('call · ' .. fmt_duration(m.call.secs)))
+        .. dir
+        .. (chat.chatType ~= 'oneOnOne' and who ~= '' and (' · ' .. who) or '')
       table.insert(
         lines,
         plain and ('_— ' .. what .. ' · ' .. long_time(m.at) .. ' —_') or ('\27[36m— ' .. what .. ' · ' .. long_time(m.at) .. ' —\27[0m')
@@ -1621,7 +1824,16 @@ local function complete(opts, rest)
   out(vim.json.encode { context = context, prefix = term, replace_start = start, replace_end = finish, candidates = candidates })
 end
 
-local commands = { search = search, show = show, terms = terms, complete = complete, url = url, refresh = refresh, send = send, read = read }
+--- Re-reads the desktop app's call log now.
+local function calls()
+  local data = sync_local_calls()
+  if not data then
+    fail('no Teams desktop app cache at ' .. DESKTOP_DB .. ' (or no python3)')
+  end
+  io.stderr:write(('%d calls in %s\n'):format(vim.tbl_count(data.calls), LOCAL_CALLS))
+end
+
+local commands = { search = search, show = show, terms = terms, complete = complete, url = url, refresh = refresh, send = send, read = read, calls = calls }
 local command = _G.arg[1]
 if not commands[command] then
   fail('unknown command: ' .. tostring(command) .. ' (expected: ' .. table.concat(vim.tbl_keys(commands), ', ') .. ')', 2)
