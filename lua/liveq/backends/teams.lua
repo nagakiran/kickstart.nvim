@@ -44,6 +44,12 @@
 -- call it lacks; `nvim -l teams.lua calls` re-reads it now. LIVEQ_TEAMS_DESKTOP_DB names the app's LevelDB directory
 -- ('' turns this off); without the app or python3 everything above still works from Graph alone.
 --
+-- Meetings attended: the chat "Meetings attended" (`type:attended`) lists the meetings you joined by start time, how
+-- long each ran and each day's total, with the day's call time beside it. A meeting counts when you are among the
+-- people of its callEnded event: Graph's (in the index) and, on macOS, the desktop app's (teams_calls.py, back months
+-- further), joined by call id. Teams keeps no join or leave times (every participant's duration in the event is the
+-- call's length), so a meeting's time is its length, an upper bound; overlapping meetings count once in a day's total.
+--
 -- Auth: a Graph token (Chat.ReadWrite, User.Read) printed by LIVEQ_TEAMS_TOKEN_CMD, by default
 -- `~/.venvs/mail/bin/python ~/rcfiles/bin/mail/o365_auth.py token-graph $LIVEQ_TEAMS_ACCOUNT` (account defaulting to
 -- $HPE_MAIL_ADDR). It is cached until a few minutes before it expires, so most calls do not start Python. The token
@@ -73,6 +79,9 @@ local TYPES = {
   notes = 'self',
   you = 'self',
   calls = 'calls',
+  attended = 'attended',
+  meetings = 'attended',
+  att = 'attended',
   call = 'calls',
   cal = 'calls',
 }
@@ -82,12 +91,15 @@ local TYPE_TAG = {
   meeting = '\27[35mmtg\27[0m',
   self = '\27[33myou\27[0m',
   calls = '\27[36mcal\27[0m',
+  attended = '\27[35matt\27[0m',
 }
 -- The self chat ("notes to self") is not in /me/chats and /chats/48:notes is refused ("not a ChatThread"), but its
 -- messages are readable at /chats/48:notes/messages: fetch() adds it to the list from its newest message.
 local SELF_CHAT = '48:notes'
 local CALL_LOG = '48:calllogs'
 -- the chats that are not in /me/chats, added to the list from their newest message
+-- the summary of meetings attended, made by fetch() from the meetings' callEnded events (no Graph chat)
+local MEETINGS = '0:meetings'
 local PSEUDO = {
   { id = SELF_CHAT, topic = 'Notes (you)', chatType = 'self', webUrl = 'https://teams.microsoft.com/l/chat/48:notes/0' },
   -- the Calls app
@@ -101,6 +113,7 @@ local DESKTOP_DB = os.getenv 'LIVEQ_TEAMS_DESKTOP_DB'
   )
 local CALLS_READER = vim.fs.dirname(SCRIPT) .. '/teams_calls.py'
 local LOCAL_CALLS = CACHE .. '/calls.json'
+local TITLES = CACHE .. '/titles.json' -- topics of chats outside the list (meetings attended long ago), kept for good
 local INDEX = CACHE .. '/index.json'
 local KEEP = tonumber(os.getenv 'LIVEQ_TEAMS_KEEP') -- nil: keep every message
 local DEEP = 300 -- messages per chat that `refresh --deep` backfills to, unless given
@@ -640,11 +653,15 @@ local function sync_local_calls()
   if not ok or type(list) ~= 'table' then
     return nil
   end
-  local held = (read_json(LOCAL_CALLS) or {}).calls or {}
-  for _, c in ipairs(list) do
+  local old = read_json(LOCAL_CALLS) or {}
+  local held, meetings = old.calls or {}, old.meetings or {}
+  for _, c in ipairs(list.calls or list) do
     held[c.id] = c
   end
-  local data = { at = os.time(), calls = held }
+  for _, m in ipairs(list.meetings or {}) do
+    meetings[m.id] = m
+  end
+  local data = { at = os.time(), calls = held, meetings = meetings }
   write_json(LOCAL_CALLS, data)
   return data
 end
@@ -697,6 +714,90 @@ local function desktop_calls(data)
 end
 
 local CALL_ARROW = { incoming = '←', outgoing = '→' }
+
+--- The meetings you joined, newest first: id, chat, start and stop (epoch), secs (the meeting's length) and n (the
+--- people who joined). From the callEnded events of the index (Graph) and of the desktop app (LOCAL_CALLS), by call
+--- id; a meeting is a call in a meeting chat or of a scheduled or recurring meeting (an ad hoc group call is a call).
+local function attended_meetings(data)
+  local my_id = data and data.me
+  local by_chat = {}
+  for _, c in ipairs(data and data.chats or {}) do
+    by_chat[c.id] = c
+  end
+  local function joined(people)
+    for _, w in ipairs(people or {}) do
+      if type(w) == 'table' and w.u == my_id then
+        return true
+      end
+    end
+    return false
+  end
+  local list, seen = {}, {}
+  local function add(id, chat_id, stop, secs, people)
+    if id and not seen[id] and stop and (secs or 0) > 0 and joined(people) then
+      seen[id] = true
+      table.insert(list, { id = id, chat = chat_id, start = stop - secs, stop = stop, secs = secs, n = #people })
+    end
+  end
+  for id, k in pairs((read_json(LOCAL_CALLS) or {}).meetings or {}) do
+    if (by_chat[k.chat] or {}).chatType == 'meeting' or k.type == 'Scheduled' or k.type == 'Recurring' then
+      add(id, k.chat, epoch(k['end']), k.secs, k.people)
+    end
+  end
+  for chat_id, entry in pairs(read_json(INDEX) or {}) do
+    for _, k in ipairs(type(entry) == 'table' and entry.calls or {}) do
+      if k.kind == 'meeting' or (by_chat[chat_id] or {}).chatType == 'meeting' then
+        add(k.id, chat_id, epoch(k.at), k.secs, k.with)
+      end
+    end
+  end
+  table.sort(list, function(a, b)
+    return a.start > b.start
+  end)
+  return list
+end
+
+--- Fetches the topics of chats not in the list (in $batch requests of 20) into TITLES; each is asked once ('' for one
+--- Graph refuses or that has no topic).
+local function fetch_titles(ids)
+  local titles = read_json(TITLES) or {}
+  local todo = vim.tbl_filter(function(id)
+    return titles[id] == nil
+  end, ids)
+  for i = 1, #todo, 20 do
+    local group = vim.list_slice(todo, i, i + 19)
+    local requests = {}
+    for j, id in ipairs(group) do
+      table.insert(requests, { id = tostring(j), method = 'GET', url = '/chats/' .. id .. '?$select=topic' })
+    end
+    local reply = api('POST', '/$batch', { requests = requests })
+    for _, r in ipairs(reply and reply.responses or {}) do
+      local id = group[tonumber(r.id)]
+      if id and r.status == 200 then
+        titles[id] = (r.body or {}).topic or ''
+      elseif id and (r.status == 403 or r.status == 404) then
+        titles[id] = ''
+      end
+    end
+  end
+  if #todo > 0 then
+    write_json(TITLES, titles)
+  end
+  return titles
+end
+
+--- A meeting's title: its chat's name, else its fetched topic.
+local function meeting_title(chat_id, chat, my_id, titles)
+  if chat then
+    return chat_name(chat, my_id)
+  end
+  local t = titles and titles[chat_id]
+  return t and t ~= '' and t or '(untitled meeting)'
+end
+
+local function iso_utc(t)
+  return os.date('!%Y-%m-%dT%H:%M:%SZ', math.floor(t))
+end
 
 --- Fetches the chat list, newest activity first, then the members of the chats that changed (in $batch requests of
 --- 20, since expanding members inline costs seconds per meeting chat). Writes the cache and returns it.
@@ -771,7 +872,7 @@ local function fetch()
     seen_ids[c.id] = true
   end
   for _, c in ipairs(old.chats or {}) do
-    if not seen_ids[c.id] then
+    if not seen_ids[c.id] and c.id ~= MEETINGS then
       seen_ids[c.id] = true
       table.insert(chats, c)
     end
@@ -858,6 +959,43 @@ local function fetch()
   local held = read_json(LOCAL_CALLS)
   if not held or (newest_call and not (held.calls or {})[newest_call] and os.time() - (held.at or 0) > 300) then
     sync_local_calls()
+  end
+
+  -- the meetings attended, placed by the newest one's end among the chats; the titles of their chats not in the list
+  local attended = attended_meetings(data)
+  local listed, unlisted, asked = {}, {}, {}
+  for _, c in ipairs(chats) do
+    listed[c.id] = true
+  end
+  for _, rec in ipairs(attended) do
+    if rec.chat and not listed[rec.chat] and not asked[rec.chat] then
+      asked[rec.chat] = true
+      table.insert(unlisted, rec.chat)
+    end
+  end
+  if #unlisted > 0 then
+    fetch_titles(unlisted)
+  end
+  local newest = attended[1]
+  if newest then
+    local at = iso_utc(newest.stop)
+    local pos = #chats + 1
+    for i, c in ipairs(chats) do
+      if (epoch(c.preview and c.preview.at or c.updated) or 0) < newest.stop then
+        pos = i
+        break
+      end
+    end
+    table.insert(chats, pos, {
+      id = MEETINGS,
+      topic = 'Meetings attended',
+      chatType = 'attended',
+      webUrl = 'https://teams.microsoft.com/l/app/ef56c0de-36fc-4ef8-b417-3d82ba9d073c', -- the Calendar app
+      updated = at,
+      members = {},
+      preview = { id = newest.id, at = at, event = true, meeting = { chat = newest.chat, secs = newest.secs } },
+    })
+    write_json(CHATS, data)
   end
   return data
 end
@@ -1271,7 +1409,7 @@ local function search(opts, rest)
   end, data.chats)
   if query == '' then
     out(
-      ('\t\27[2m%d chats, %d unread (cache %s%s). Filter: words with: type:1:1|group|meeting|calls is:unread has:call since:7d on:11-05   enter: open chat  ctrl-r: refresh\27[0m\t\t'):format(
+      ('\t\27[2m%d chats, %d unread (cache %s%s). Filter: words with: type:1:1|group|meeting|calls|attended is:unread has:call since:7d on:11-05   enter: open chat  ctrl-r: refresh\27[0m\t\t'):format(
         #data.chats,
         unread_count,
         age(data.at),
@@ -1309,6 +1447,10 @@ local function search(opts, rest)
       else
         last = '\27[2m(last call ended ' .. short_time(pv.at) .. ')\27[0m'
       end
+    elseif c.id == MEETINGS and pv.meeting then
+      local m_chat = find(pv.meeting.chat)
+      local title = meeting_title(pv.meeting.chat, m_chat, my_id, not m_chat and read_json(TITLES) or nil)
+      last = ('\27[2m(%s %s)\27[0m'):format(clean(title), fmt_duration(pv.meeting.secs))
     elseif pv.call then
       last = '\27[2m(' .. (pv.call.started and 'call started' or ('call ' .. fmt_duration(pv.call.secs))) .. ')\27[0m'
     end
@@ -1416,13 +1558,22 @@ local function show(opts, rest)
   local searching = #words > 0 or on ~= nil
   local want = tonumber(opts.count) or (searching and 100000) or (chat.id == CALL_LOG and 300) or (plain and 100) or 30
   -- the call log's older entries come from the desktop app's cache, when there is one, so Graph's newest 50 do
-  local list, err = messages(chat, chat.id == CALL_LOG and math.min(want, 50) or want, opts.fresh, searching)
+  local list, err, all_meetings
+  if chat.id == MEETINGS then
+    all_meetings, list = attended_meetings(data), {}
+    for _, rec in ipairs(all_meetings) do
+      table.insert(list, { id = rec.id, type = 'meeting', at = iso_utc(rec.start), rec = rec })
+    end
+    list = vim.list_slice(list, 1, tonumber(opts.count) or (searching and 100000) or 300)
+  else
+    list, err = messages(chat, chat.id == CALL_LOG and math.min(want, 50) or want, opts.fresh, searching)
+  end
   if not list then
     out((plain and '' or '\27[31m') .. 'Cannot fetch the messages: ' .. err .. (plain and '' or '\27[0m'))
     return
   end
   local desktop, desktop_by_id, all_calls = {}, {}, nil
-  if chat.chatType ~= 'self' then
+  if chat.chatType ~= 'self' and chat.id ~= MEETINGS then
     desktop, desktop_by_id = desktop_calls(data)
   end
   if chat.id == CALL_LOG and #desktop > 0 then
@@ -1472,7 +1623,45 @@ local function show(opts, rest)
   local name = chat_name(chat, my_id)
   -- the call log: each call joined by its id to the chat event that has its duration and people
   local known, day_of, chat_by_id, day_totals = {}, nil, {}, {}
-  if chat.id == CALL_LOG then
+  local titles
+  if chat.id == MEETINGS then
+    titles = read_json(TITLES) or {}
+    for _, c in ipairs(data.chats or {}) do
+      chat_by_id[c.id] = c
+    end
+    -- per day: the meetings, the time they covered (overlaps once) and the time on answered calls
+    local spans = {}
+    for _, rec in ipairs(all_meetings) do
+      local day = os.date('%a %b %d', rec.start)
+      local d = day_totals[day] or { n = 0, secs = 0, calls = 0 }
+      d.n = d.n + 1
+      day_totals[day] = d
+      spans[day] = spans[day] or {}
+      table.insert(spans[day], { rec.start, rec.stop })
+    end
+    for day, list_of in pairs(spans) do
+      table.sort(list_of, function(a, b)
+        return a[1] < b[1]
+      end)
+      local total, s0, e0 = 0, nil, nil
+      for _, span in ipairs(list_of) do
+        if e0 and span[1] <= e0 then
+          e0 = math.max(e0, span[2])
+        else
+          total = total + (e0 and (e0 - s0) or 0)
+          s0, e0 = span[1], span[2]
+        end
+      end
+      day_totals[day].secs = total + (e0 and (e0 - s0) or 0)
+    end
+    for _, rec in ipairs((desktop_calls(data))) do
+      local t = epoch(rec.at)
+      local d = t and day_totals[os.date('%a %b %d', t)]
+      if d and rec.secs then
+        d.calls = d.calls + rec.secs
+      end
+    end
+  elseif chat.id == CALL_LOG then
     for _, c in ipairs(data.chats or {}) do
       chat_by_id[c.id] = c
     end
@@ -1519,6 +1708,11 @@ local function show(opts, rest)
     table.insert(lines, '\27[1m' .. name .. '\27[0m  \27[2m' .. (chat.chatType or '') .. ', newest first\27[0m')
     table.insert(lines, '')
   end
+  if chat.id == MEETINGS then
+    local note =
+      "Meetings you joined, by start time, and how long each ran. Teams keeps no join or leave times, so it is the meeting's length (an upper bound); a day's total counts overlapping meetings once."
+    vim.list_extend(lines, { plain and ('_' .. note .. '_') or ('\27[2m' .. note .. '\27[0m'), '' })
+  end
   if chat.id == CALL_LOG then
     local note = #desktop > 0
         and "When each call started, → outgoing, ← incoming, and how long it lasted: from the Teams app's cache on this Mac. A day's total counts answered calls."
@@ -1529,7 +1723,26 @@ local function show(opts, rest)
     local who = m.fromId == my_id and 'You' or (m.from or '?')
     local t = on and epoch(m.at)
     local first = #lines + 1
-    if m.type == 'calllog' then
+    if m.type == 'meeting' then
+      local rec = m.rec
+      local day = os.date('%a %b %d', rec.start)
+      if day ~= day_of then
+        if day_of then
+          table.insert(lines, '')
+        end
+        day_of = day
+        local d = day_totals[day] or { n = 0, secs = 0, calls = 0 }
+        local sum = (' · %d meeting%s · %s'):format(d.n, d.n == 1 and '' or 's', fmt_duration(d.secs))
+          .. (d.calls > 0 and (' · calls ' .. fmt_duration(d.calls)) or '')
+        table.insert(lines, plain and ('## ' .. day .. sum) or ('\27[1m' .. day .. '\27[0m\27[2m' .. sum .. '\27[0m'))
+      end
+      local title = meeting_title(rec.chat, chat_by_id[rec.chat], my_id, titles)
+      local time, dur, people = os.date('%H:%M', rec.start), fmt_duration(rec.secs), ('%d people'):format(rec.n)
+      table.insert(
+        lines,
+        plain and ('- %s · %s · %s · %s'):format(time, dur, title, people) or ('  %s  %-8s %s  \27[2m%s\27[0m'):format(time, dur, title, people)
+      )
+    elseif m.type == 'calllog' then
       local et = epoch(m.at)
       local day = et and os.date('%a %b %d', et) or ''
       if day ~= day_of then
@@ -1694,8 +1907,8 @@ local function send(opts, rest)
   else
     text = table.concat(vim.list_slice(rest, 2), ' ')
   end
-  if id == CALL_LOG then
-    fail 'send: the call log is read-only'
+  if id == CALL_LOG or id == MEETINGS then
+    fail 'send: the call log and the meetings are read-only'
   end
   text = vim.trim(text or '')
   if text == '' then
@@ -1714,7 +1927,7 @@ local function read(_, rest)
   if not id or not id:match '^%d+:' then
     fail 'read: no chat id'
   end
-  if id == SELF_CHAT or id == CALL_LOG then
+  if id == SELF_CHAT or id == CALL_LOG or id == MEETINGS then
     return -- no read state (markChatReadForUser refuses them), and never unread
   end
   local my_id, tenant = me()
@@ -1740,7 +1953,7 @@ end
 
 local PREFIXES = {
   { 'with:', "a member's name or address" },
-  { 'type:', '1:1, group, meeting, self or calls (the call log)' },
+  { 'type:', '1:1, group, meeting, self, calls (the call log) or attended (meetings joined)' },
   { 'is:unread', 'chats with unread messages' },
   { 'has:call', 'chats with a call (with on:, a call those days); shows its duration' },
   { 'since:', 'last activity since: 1d, 7d, 2w, 1M or a date' },
@@ -1795,7 +2008,7 @@ local function complete(opts, rest)
   elseif key == 'type' or key == 'since' or key == 'is' or key == 'on' then
     context = 'value'
     local values = ({
-      type = { '1:1', 'group', 'meeting', 'self', 'calls' },
+      type = { '1:1', 'group', 'meeting', 'self', 'calls', 'attended' },
       since = { '1d', '7d', '2w', '1M', '3M' },
       is = { 'unread' },
       on = { 'today', 'yesterday', os.date('%m-%d', os.time() - 2 * DAY) },

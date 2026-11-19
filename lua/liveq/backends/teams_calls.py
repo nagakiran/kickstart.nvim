@@ -2,18 +2,27 @@
 
     python3 -I teams_calls.py DIR      DIR: the app's IndexedDB LevelDB directory (https_teams.microsoft.com_0...)
 
-Prints a JSON array of calls, one object each: id, start, connect, end (ISO times; connect is null for a call never
-answered), dir (incoming|outgoing), type (twoParty|multiParty), state (accepted|missed), thread (the chat of a group
-call), people ([{u: user id, n: name or null}], everyone on the call, you included).
+Prints a JSON object:
+  calls     the call log, one object per call: id, start, connect, end (ISO times; connect is null for a call never
+            answered), dir (incoming|outgoing), type (twoParty|multiParty), state (accepted|missed), thread (the chat
+            of a group call), people ([{u: user id, n: name or null}], everyone on the call, you included)
+  meetings  the calls that ended in a chat (meetings, group calls), from the chat's callEnded event: id, chat, start,
+            end (ISO), secs (how long the call lasted), type (Scheduled|Recurring|Adhoc), people (everyone who joined)
 
 Graph strips the call log (thread 48:calllogs) to each call's id, but the app caches the whole record as the JSON
-property `call-log` of each log message. This reads the LevelDB tables and write-ahead log directly (Snappy and all,
-standard library only), finds those properties and decodes them, without parsing the V8-serialized values around them.
-Read-only: the files are only opened for reading, so the app may keep running.
+property `call-log` of each log message; a chat's callEnded event is cached as XML (`<ended/><partlist>...`). This
+reads the LevelDB tables and write-ahead log directly (Snappy and all, standard library only), finds those and decodes
+them, without parsing the V8-serialized values around them. Read-only: the files are only opened for reading, so the
+app may keep running.
+
+Each person's <duration> in a partlist is the call's length, the same for everyone (checked over 431 meetings), not
+the time that person was in it: Teams does not keep when you joined or left.
 """
 
+import datetime
 import json
 import os
+import re
 import sys
 
 
@@ -141,6 +150,56 @@ def call_logs(buf, found):
             i = buf.find(needle, i + 1)
 
 
+ENDED = re.compile(
+    rb"<ended/><partlist[^>]*>(.*?)</partlist>(.*?)<callEventType>callEnded</callEventType>.*?"
+    rb"<conversationStartTime>([^<]*)</conversationStartTime>.*?<callId>([^<]*)</callId>",
+    re.S,
+)
+PART = re.compile(rb'<part identity="([^"]*)">(.*?)</part>', re.S)
+CHAT = re.compile(rb"conversationId\"..?(19:[^\"\x00-\x1f]{8,160}?@(?:thread\.v2|unq\.gbl\.spaces|thread\.tacv2|thread\.skype))")
+
+
+def tag(xml, name):
+    m = re.search(rb"<" + name + rb">([^<]*)</" + name + rb">", xml)
+    return m.group(1).decode("utf-8", "replace") if m else None
+
+
+def iso(stamp):
+    """`08/20/2026 05:34:29` (UTC) -> `2026-08-20T05:34:29Z`; None for Teams' zero date or junk."""
+    try:
+        t = datetime.datetime.strptime(stamp, "%m/%d/%Y %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+    return None if t.year < 2000 else t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def ended_calls(buf, found):
+    """Adds the callEnded events in `buf` to `found` (by call id); the chat is the nearest conversationId before."""
+    if b"<ended/>" not in buf:
+        return
+    for m in ENDED.finditer(buf):
+        start = iso(m.group(3).decode("latin-1"))
+        if not start:
+            continue
+        chats = CHAT.findall(buf[max(0, m.start() - 4000) : m.start()])
+        people, secs = [], 0
+        for ident, body in PART.findall(m.group(1)):
+            duration = tag(body, b"duration")
+            secs = max(secs, int(duration) if duration and duration.isdigit() else 0)
+            u = user(ident.decode("latin-1"))
+            people.append({"u": u, "n": tag(body, b"displayName") or (None if u else ident.decode("latin-1"))})
+        begin = datetime.datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ")
+        found[m.group(4).decode("latin-1")] = {
+            "id": m.group(4).decode("latin-1"),
+            "chat": chats[-1].decode("latin-1") if chats else None,
+            "start": start,
+            "end": (begin + datetime.timedelta(seconds=secs)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "secs": secs,
+            "type": tag(m.group(2), b"meetingType"),
+            "people": people,
+        }
+
+
 def user(identity):
     """`8:orgid:<id>` -> <id>; None for anything else (a phone number, a bot)."""
     if isinstance(identity, str) and identity.startswith("8:orgid:"):
@@ -185,7 +244,7 @@ def trim(c):
 def main():
     if len(sys.argv) != 2 or not os.path.isdir(sys.argv[1]):
         sys.exit("usage: teams_calls.py DIR (the Teams IndexedDB LevelDB directory)")
-    root, found = sys.argv[1], {}
+    root, found, ended = sys.argv[1], {}, {}
     # oldest files first, so a newer copy of a record wins
     for name in sorted(os.listdir(root)):
         path = os.path.join(root, name)
@@ -193,12 +252,14 @@ def main():
             if name.endswith(".ldb"):
                 for block in table_blocks(path):
                     call_logs(block, found)
+                    ended_calls(block, ended)
             elif name.endswith(".log"):
                 for record in log_records(path):
                     call_logs(record, found)
+                    ended_calls(record, ended)
         except (OSError, IndexError, ValueError):
             continue  # a file compacted away or half-written while reading: the rest still counts
-    json.dump([trim(c) for c in found.values()], sys.stdout, separators=(",", ":"))
+    json.dump({"calls": [trim(c) for c in found.values()], "meetings": list(ended.values())}, sys.stdout, separators=(",", ":"))
 
 
 if __name__ == "__main__":
