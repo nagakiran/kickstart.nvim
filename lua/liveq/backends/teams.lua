@@ -15,6 +15,7 @@
 -- The query, evaluated locally over the cache:
 --   words (each must be in the chat's name, members or messages; -word excludes, on name/members/last message only)
 --   with:NAME (a member's name or address)   type:1:1|group|meeting|calls (or the list's tags: grp|mtg|you|cal)   is:unread   since:7d|2w|1M|2026-11-01 (last activity)
+--   from:me|NAME (a message sent by you, or by someone whose name has NAME; with on:, that day; -from: none of theirs)
 --   has:call (chats with a call; with on:, a call that day; the row shows its duration and the calls' total)
 --   on:DATE (a message that local day: 2026-11-05, 11-05, today, yesterday, 3d = three days ago; on:11-03..11-05 a range;
 --   with words, a message of those days must have the words not found in the name/members/last message)
@@ -1125,6 +1126,8 @@ local function plan(query)
     end
     if key == 'with' then
       table.insert(p.with, { value:lower(), negated })
+    elseif key == 'from' then
+      p.from = { value:lower(), negated }
     elseif key == 'type' then
       p.type = TYPES[value:lower()] or value
       p.type_negated = negated
@@ -1144,6 +1147,14 @@ local function plan(query)
     end
   end
   return p
+end
+
+--- Whether message `m` (of the index or a chat's cache) was sent by `who` of `from:`: `me`/`you`, else a part of a name.
+local function sent_by(m, who, my_id)
+  if who == 'me' or who == 'you' then
+    return my_id ~= nil and m.fromId == my_id
+  end
+  return (m.from or ''):lower():find(who, 1, true) ~= nil
 end
 
 --- Whether chat `c` matches plan `p`; also returns the message that matched when a word was found only in messages
@@ -1201,6 +1212,25 @@ local function matches(c, p, my_id, index)
     end
     if #day_msgs == 0 then
       return false
+    end
+  end
+  -- `from:`: the messages (of `on:`'s days, else all indexed ones) sent by someone; the chat needs one of them, and
+  -- the row shows the newest (words, when given, must be in them). `-from:` needs messages but none of theirs.
+  if p.from then
+    local theirs, others = {}, {}
+    for _, m in ipairs(day_msgs or index and index[c.id] and index[c.id].messages or {}) do
+      table.insert(sent_by(m, p.from[1], my_id) and theirs or others, m)
+    end
+    if p.from[2] then
+      if #theirs > 0 or #others == 0 then
+        return false
+      end
+      day_msgs = others
+    else
+      if #theirs == 0 then
+        return false
+      end
+      day_msgs = theirs
     end
   end
   local people = {}
@@ -1363,7 +1393,7 @@ local function search(opts, rest)
   end
   local my_id = data.me
   local p = plan(query)
-  local index = (#p.words > 0 or p.on or p.call ~= nil) and read_json(INDEX) or nil
+  local index = (#p.words > 0 or p.on or p.from or p.call ~= nil) and read_json(INDEX) or nil
   if p.call ~= nil and index then
     -- the desktop app's answered calls join the chats' own call events (the same call has the same id in both)
     local extra = {}
@@ -1409,7 +1439,7 @@ local function search(opts, rest)
   end, data.chats)
   if query == '' then
     out(
-      ('\t\27[2m%d chats, %d unread (cache %s%s). Filter: words with: type:1:1|group|meeting|calls|attended is:unread has:call since:7d on:11-05   enter: open chat  ctrl-r: refresh\27[0m\t\t'):format(
+      ('\t\27[2m%d chats, %d unread (cache %s%s). Filter: words with: from:me type:1:1|group|meeting|calls|attended is:unread has:call since:7d on:11-05   enter: open chat  ctrl-r: refresh\27[0m\t\t'):format(
         #data.chats,
         unread_count,
         age(data.at),
@@ -1554,8 +1584,8 @@ local function show(opts, rest)
   local my_id = data.me
   local plain = opts.plain
   local q = opts.match and plan(opts.match) or {}
-  local words, on = q.words or {}, q.on
-  local searching = #words > 0 or on ~= nil
+  local words, on, from = q.words or {}, q.on, q.from
+  local searching = #words > 0 or on ~= nil or from ~= nil
   local want = tonumber(opts.count) or (searching and 100000) or (chat.id == CALL_LOG and 300) or (plain and 100) or 30
   -- the call log's older entries come from the desktop app's cache, when there is one, so Graph's newest 50 do
   local list, err, all_meetings
@@ -1721,7 +1751,7 @@ local function show(opts, rest)
   end
   for _, m in ipairs(list) do
     local who = m.fromId == my_id and 'You' or (m.from or '?')
-    local t = on and epoch(m.at)
+    local t = (on or from) and epoch(m.at)
     local first = #lines + 1
     if m.type == 'meeting' then
       local rec = m.rec
@@ -1815,7 +1845,8 @@ local function show(opts, rest)
       table.insert(lines, render_quotes(m.text, plain))
       table.insert(lines, '')
     end
-    if t and t >= on[1] and t < on[2] then
+    -- the message counts for `on:` and `from:` (the preview jumps to those of the day, or of the sender)
+    if t and (not on or (t >= on[1] and t < on[2])) and (not from or (m.type == 'message' and sent_by(m, from[1], my_id) ~= from[2])) then
       for i = first, #lines do
         in_range[i] = i == first and 'head' or true
       end
@@ -1833,7 +1864,7 @@ local function show(opts, rest)
     for j, line in ipairs(vim.split(entry, '\n', { plain = true })) do
       n = n + 1
       local marked, hit = highlight(line, words)
-      if n > 1 and hit and (not on or in_range[i]) then
+      if n > 1 and hit and (not (on or from) or in_range[i]) then
         table.insert(numbers, n)
       end
       if in_range[i] == 'head' and j == 1 then
@@ -1842,7 +1873,7 @@ local function show(opts, rest)
       io.stdout:write(marked, '\n')
     end
   end
-  if on and #numbers == 0 then
+  if (on or from) and #numbers == 0 then
     numbers = heads
   end
   io.stdout:flush()
@@ -1955,6 +1986,7 @@ local PREFIXES = {
   { 'with:', "a member's name or address" },
   { 'type:', '1:1, group, meeting, self, calls (the call log) or attended (meetings joined)' },
   { 'is:unread', 'chats with unread messages' },
+  { 'from:', 'a message sent by: me, or a name (with on:, that day)' },
   { 'has:call', 'chats with a call (with on:, a call those days); shows its duration' },
   { 'since:', 'last activity since: 1d, 7d, 2w, 1M or a date' },
   { 'on:', 'messages on a day: today, yesterday, 3d (ago), 11-05, 2026-11-05, or A..B' },
@@ -1979,7 +2011,7 @@ local function complete(opts, rest)
   local add = function(insert, kind, detail)
     table.insert(candidates, { display = insert, insert = insert .. ' ', cursor_offset = vim.fn.strchars(insert) + 1, kind = kind, detail = detail or '' })
   end
-  if key == 'with' then
+  if key == 'with' or key == 'from' then
     context = 'value'
     local data = read_json(CHATS) or {}
     local counts, typed = {}, value:lower():gsub('^"', '')
@@ -1991,6 +2023,9 @@ local function complete(opts, rest)
       end
     end
     local list = {}
+    if key == 'from' and ('me'):sub(1, #typed) == typed then
+      add(sign .. 'from:me', 'value', 'messages you sent')
+    end
     for n, k in pairs(counts) do
       -- any word of the name may be the one typed
       local lower = n:lower()
@@ -1999,11 +2034,14 @@ local function complete(opts, rest)
       end
     end
     table.sort(list, function(a, b)
-      return a[2] ~= b[2] and a[2] > b[2] or a[1] < b[1]
+      if a[2] ~= b[2] then
+        return a[2] > b[2] -- most chats first, then by name
+      end
+      return a[1] < b[1]
     end)
     for i = 1, math.min(#list, 100) do
       local n = list[i][1]
-      add(sign .. 'with:' .. (n:find '[%s,]' and ('"' .. n .. '"') or n), 'value', list[i][2] .. ' chats')
+      add(sign .. key .. ':' .. (n:find '[%s,]' and ('"' .. n .. '"') or n), 'value', list[i][2] .. ' chats')
     end
   elseif key == 'type' or key == 'since' or key == 'is' or key == 'on' then
     context = 'value'
