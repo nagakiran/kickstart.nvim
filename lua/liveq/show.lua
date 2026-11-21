@@ -4,9 +4,11 @@ local util = require 'liveq.util'
 
 local M = {}
 
---- Puts the cursor of the current window on the first match of a query, and the query's words in the search register
---- (highlighted, `n`/`N` go through them). The words come from the backend (`terms -- QUERY`, sources with `match`);
---- the first match is the first one of the word that is the rarest in the text, below its title line, as in the preview.
+--- Puts the query's words in the search register (highlighted, `n`/`N` go through them), and unless `keep_cursor`, the
+--- cursor of the current window on the first match. The words come from the backend (`terms -- QUERY`, sources with
+--- `match`). Which match is first is the backend's call (see show_plain), so that a buffer starts where the picker's
+--- preview does; this one (the first of the word that is the rarest in the text, below its title line) is only for a
+--- backend that gave none.
 local function goto_matches(source, query, keep_cursor)
   if not source.match or not query or vim.trim(query) == '' then
     return
@@ -46,30 +48,48 @@ local function goto_matches(source, query, keep_cursor)
   end
 end
 
---- Runs `show --plain` for a window `width` wide. An item that is a part of a bigger text (a message of a mail
---- thread) gives the line where it starts through $LIVEQ_MATCH_FILE (a number followed by `t`, see cli.lua): the text
---- and that line, nil when there is none.
-local function show_plain(source, id, width)
+--- Runs `show --plain` for a window `width` wide, with `--match QUERY` for a source with `match`, through
+--- $LIVEQ_MATCH_FILE (the format of the picker's preview, see cli.lua) learning:
+---   start: where the item starts in a bigger text (a message of a mail thread: the number followed by `t`);
+---   first: the line of the match the backend shows first, the same one the picker's preview starts at.
+--- Returns the text, start and first (nil when there is none).
+local function show_plain(source, id, width, query)
   local file = vim.fn.tempname()
-  local out = util.run(source, { 'show', '--plain', '--', id }, { env = { LIVEQ_WIDTH = tostring(width), LIVEQ_MATCH_FILE = file } })
-  local start
+  local args = { 'show', '--plain' }
+  if source.match and query and vim.trim(query) ~= '' then
+    vim.list_extend(args, { '--match', query })
+  end
+  vim.list_extend(args, { '--', id })
+  local out = util.run(source, args, { env = { LIVEQ_WIDTH = tostring(width), LIVEQ_MATCH_FILE = file } })
+  local start, first
   local f = io.open(file, 'r')
   if f then
     f:read '*l'
-    f:read '*l'
-    start = tonumber(((f:read '*l' or ''):match '(%d+)t'))
+    local index = tonumber(f:read '*l' or '')
+    local numbers = vim.split(f:read '*l' or '', ' ', { trimempty = true })
     f:close()
     os.remove(file)
+    for _, n in ipairs(numbers) do
+      start = start or tonumber(n:match '^(%d+)t$')
+    end
+    first = index and numbers[index] and tonumber(numbers[index]:match '^%d+$')
   end
-  return out, start
+  return out, start, first
 end
 
---- Goes to the start of the item within the text (`start`), else to the first match of the query.
-local function position(source, opts, start)
-  goto_matches(source, opts and opts.query, start ~= nil)
-  if start and start <= vim.api.nvim_buf_line_count(0) then
+--- Goes to the start of the item within the text (`start`), else to the backend's first match of the query
+--- (`first`), else to goto_matches' own.
+local function position(source, opts, start, first)
+  local query = opts and opts.query
+  goto_matches(source, query, start ~= nil or first ~= nil)
+  local count = vim.api.nvim_buf_line_count(0)
+  if start and start <= count then
     vim.api.nvim_win_set_cursor(0, { start, 0 })
     vim.cmd 'normal! zt'
+  elseif first and first <= count then
+    vim.api.nvim_win_set_cursor(0, { first, 0 })
+    pcall(vim.fn.search, vim.fn.getreg '/', 'cW', first) -- on the word itself, when it is in this line
+    vim.cmd 'normal! zz'
   end
 end
 
@@ -81,7 +101,7 @@ function M.show(source, id, opts)
     return
   end
   local width = math.min(math.floor(vim.o.columns * 0.7), 110)
-  local out, start = show_plain(source, id, width - 1)
+  local out, start, first = show_plain(source, id, width - 1, opts and opts.query)
   if not out then
     return
   end
@@ -102,7 +122,7 @@ function M.show(source, id, opts)
     title = ' ' .. id .. ' ',
   })
   vim.wo[win].wrap = true
-  position(source, opts, start)
+  position(source, opts, start, first)
   for _, lhs in ipairs { 'q', '<Esc>' } do
     vim.keymap.set('n', lhs, '<cmd>close<CR>', { buffer = buf, nowait = true })
   end
@@ -125,7 +145,7 @@ function M.buffer(source, id, opts)
   -- lay the text out as wide as the window's text area (without the number, sign and fold columns)
   local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
   local width = info.width - info.textoff - 1
-  local out, start = show_plain(source, id, width)
+  local out, start, first = show_plain(source, id, width, opts and opts.query)
   if not out then
     return
   end
@@ -143,7 +163,7 @@ function M.buffer(source, id, opts)
   vim.bo[buf].filetype = 'markdown'
   vim.api.nvim_win_set_buf(0, buf)
   vim.wo.wrap = true
-  position(source, opts, start)
+  position(source, opts, start, first)
   M.map_gx(buf, function()
     if source.url then
       M.open(source, id)

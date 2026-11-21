@@ -299,7 +299,10 @@ end
 ---
 --- `range`: the lines of the message of an `id:` item (a row of the threaded view); its first line is shown first,
 --- at the top of the preview (a number with a `t` after it), and the matches follow.
-local function print_highlighted(lines, query, id, range)
+---
+--- `plain`: the lines are printed as they are (liveq's buffer and float highlight with the search register), but the
+--- matches are still written, so that they start at the same match as the preview.
+local function print_highlighted(lines, query, id, range, plain)
   local patterns = term_patterns(query)
   local text = vim.split(table.concat(lines, '\n'), '\n', { plain = true })
   local matches, found_in = {}, {}
@@ -307,7 +310,9 @@ local function print_highlighted(lines, query, id, range)
   for n, line in ipairs(text) do
     local found
     if #patterns > 0 then
-      line, found = highlight(line, patterns)
+      local marked
+      marked, found = highlight(line, patterns)
+      line = plain and line or marked
       if found then
         table.insert(matches, n)
         found_in[#matches] = found
@@ -720,12 +725,12 @@ local function show(opts, rest)
   -- with --match, or for a message in a buffer or float ($LIVEQ_MATCH_FILE tells liveq where the message starts), the
   -- text is collected first, to find the matches and the message
   local locate = opts.plain and not is_thread(id) and os.getenv 'LIVEQ_MATCH_FILE'
-  if not collected and ((opts.match and not opts.plain) or locate) then
+  if not collected and (opts.match or locate) then
     collected, target = {}, {}
     show({ fold = opts.fold, plain = opts.plain, match = opts.match }, rest)
     local lines = collected
     collected = nil
-    print_highlighted(lines, not opts.plain and opts.match or '', id, target.start and { target.start, target.finish or math.huge })
+    print_highlighted(lines, opts.match or '', id, target.start and { target.start, target.finish or math.huge }, opts.plain)
     return
   end
   -- a thread shown with the picker's query: notmuch marks the messages that match it (`match`), so that the preview

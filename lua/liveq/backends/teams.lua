@@ -8,7 +8,9 @@
 --   nvim -l teams.lua refresh --deep [N]                   ...then backfill every chat's history to N messages (300)
 --   nvim -l teams.lua send [--file PATH] -- CHAT_ID [TEXT] post a message (TEXT, or the file's contents)
 --   nvim -l teams.lua read -- CHAT_ID                      mark the chat read, as opening it in Teams does
---   nvim -l teams.lua show --match QUERY -- CHAT_ID         the preview, with the query's words highlighted
+--   nvim -l teams.lua show --match QUERY -- CHAT_ID         the preview, with the query's words highlighted (with
+--                                                          --plain, not highlighted: for liveq's buffer and float);
+--                                                          $LIVEQ_MATCH_FILE gets the lines of the matches
 --   nvim -l teams.lua terms -- QUERY                       the query's words, as JSON (for liveq's n/N)
 --   nvim -l teams.lua calls                                re-read the Teams desktop app's call log (macOS)
 --
@@ -1884,7 +1886,7 @@ local function show(opts, rest)
       if in_range[i] == 'head' and j == 1 then
         table.insert(heads, n)
       end
-      io.stdout:write(marked, '\n')
+      io.stdout:write(plain and line or marked, '\n') -- a buffer highlights with the search register, not escapes
     end
   end
   if (on or from) and #numbers == 0 then
