@@ -45,6 +45,27 @@ return {
         return vim.list_extend(cmd, extra or {})
       end
 
+      -- A live_grep_args prompt mapping that adds an rg flag. The search term is quoted the first
+      -- time (so what follows is read as flags, see auto_quoting below) and left alone after that,
+      -- so the keys chain: `hello` <M-c> <M-g> → `"hello" -s -g `. A flag that takes a value
+      -- (-g, -t) is appended for the value to be typed; one that doesn't (-s, -w) is toggled.
+      local function rg_flag(flag, takes_value)
+        takes_value = takes_value ~= false
+        return function(prompt_bufnr)
+          local picker = action_state.get_current_picker(prompt_bufnr)
+          local prompt = vim.trim(picker:_get_prompt())
+          if prompt ~= '' and not prompt:match '^["\']' then
+            prompt = require('telescope-live-grep-args.helpers').quote(prompt)
+          end
+          if takes_value then
+            picker:set_prompt(prompt .. ' ' .. flag .. ' ')
+            return
+          end
+          local without, removed = (' ' .. prompt .. ' '):gsub('%s' .. vim.pesc(flag) .. '%f[%s]', '')
+          picker:set_prompt(removed > 0 and (vim.trim(without) .. ' ') or (prompt .. ' ' .. flag .. ' '))
+        end
+      end
+
       -- [[ Configure Telescope ]]
       -- See `:help telescope` and `:help telescope.setup()`
       require('telescope').setup {
@@ -109,15 +130,11 @@ return {
             auto_quoting = true, -- a prompt with no quotes is one literal term (`export pdf`); quote the term to add rg flags
             mappings = {
               i = {
-                -- Wrap what's typed in quotes and append a glob flag, ready for `*.go` / `!*.md`.
-                -- (<C-k> is taken by move_selection_previous above.)
-                ['<C-g>'] = function(prompt_bufnr)
-                  require('telescope-live-grep-args.actions').quote_prompt { postfix = ' -g ' }(prompt_bufnr)
-                end,
-                -- Same, but append a ripgrep file-type flag (`-t go`, `-T md` to exclude).
-                ['<C-t>'] = function(prompt_bufnr)
-                  require('telescope-live-grep-args.actions').quote_prompt { postfix = ' -t ' }(prompt_bufnr)
-                end,
+                -- rg flags on Alt (rarely needed, and <C-t> stays telescope's "open in a new tab"):
+                ['<M-g>'] = rg_flag '-g', -- a glob, then type `*.go` / `!*.md`
+                ['<M-t>'] = rg_flag '-t', -- a file type, then type `go` (`-T md` excludes)
+                ['<M-c>'] = rg_flag('-s', false), -- toggle case-sensitive (smart-case otherwise: `hello` matches `HelLo`)
+                ['<M-w>'] = rg_flag('-w', false), -- toggle whole words only
               },
             },
           },
@@ -142,10 +159,57 @@ return {
       vim.keymap.set('n', '<leader>lh', builtin.help_tags, { desc = '[L]ist [H]elp tags' })
       vim.keymap.set('n', '<leader>sw', builtin.grep_string, { desc = '[S]earch current [W]ord' })
       -- live_grep with rg filters typed in the prompt (`"pdf" -g *.go`, `"pdf" -g !*.md`, `"pdf" -t py`;
-      -- <C-g>/<C-t> quote the term and add the flag) via telescope-live-grep-args. Falls back to
+      -- <M-g>/<M-t> quote the term and add the flag; <M-c>/<M-w> toggle case-sensitive/whole word) via telescope-live-grep-args. Falls back to
       -- the builtin live_grep when the extension isn't installed.
       --   opts.title   prompt title (a filter-syntax hint is appended)
       --   opts.extra   extra rg flags, e.g. { '--hidden' }
+      --
+      -- The preview highlights only the match, not the whole line: telescope's grep previewer
+      -- highlights `col..colend` when an entry has both, but rg reports only where a match starts.
+      -- `entry_index.colend` (telescope's hook for computed entry fields, evaluated when the entry
+      -- is previewed) finds where it ends: the search term of the prompt, matched at `col` as rg
+      -- did it (smart-case unless -s/-i; literal with -F or when it has no regex characters, else
+      -- as a Vim very-magic regex, close to rg's for the usual \d \w + ? | ( ) { }). When it
+      -- can't tell (a regex Vim reads differently), it gives nil and the whole line is highlighted.
+      local regex_chars = '[%^$.*+?()%[%]{}|\\]'
+      local function match_colend(entry)
+        local ok, picker = pcall(action_state.get_current_picker, vim.api.nvim_get_current_buf())
+        local text, col = entry.text, entry.col
+        if not ok or not picker or not text or not col then
+          return nil
+        end
+        local prompt = picker:_get_prompt()
+        local has_lga, parser = pcall(require, 'telescope-live-grep-args.prompt_parser')
+        local parts = has_lga and parser.parse(prompt, true) or { prompt }
+        local term, flags = parts[1], {}
+        for i = 2, #parts do
+          flags[parts[i]] = true
+        end
+        if not term or term == '' then
+          return nil
+        end
+        local case_sensitive = flags['-s'] or flags['--case-sensitive'] or not (flags['-i'] or flags['--ignore-case']) and term:find '%u' ~= nil
+        local rest = text:sub(col)
+        if flags['-F'] or flags['--fixed-strings'] or not term:find(regex_chars) then
+          local head = rest:sub(1, #term)
+          if case_sensitive and head == term or not case_sensitive and head:lower() == term:lower() then
+            return col + #term
+          end
+          return nil
+        end
+        local okre, re = pcall(vim.regex, (case_sensitive and '\\C' or '\\c') .. '\\v' .. term)
+        local s, e
+        if okre then
+          s, e = re:match_str(rest)
+        end
+        return s == 0 and e > 0 and col + e or nil
+      end
+      local entry_index = {
+        colend = function(entry)
+          return match_colend(entry), true
+        end,
+      }
+
       local function grep_with_args(opts)
         opts = opts or {}
         local title = opts.title or 'Live Grep'
@@ -156,12 +220,14 @@ return {
         if ok and lga then
           lga.live_grep_args {
             cwd = opts.cwd,
-            prompt_title = title .. '  (-g glob, -t type)',
+            entry_index = entry_index,
+            prompt_title = title .. '  (M-g glob, M-t type, M-c case, M-w word)',
             vimgrep_arguments = vim.list_extend(vim.deepcopy(require('telescope.config').values.vimgrep_arguments), extra),
           }
         else
           builtin.live_grep {
             cwd = opts.cwd,
+            entry_index = entry_index,
             prompt_title = title,
             additional_args = function()
               return extra
