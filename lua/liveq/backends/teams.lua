@@ -1859,13 +1859,27 @@ local function show(opts, rest)
   -- highlight the words, and tell liveq's picker the lines that have them, so the preview scrolls to the first; with
   -- `on:`, only those in the messages of its days count, and when none has the words (they matched the chat's name or
   -- members), the first line of each of those messages
+  -- The first match shown is in the message with the most of the words (the newest of those, as the picker's row
+  -- shows), not the first line with any one of them: a common word like `run` is in many messages.
   local numbers, heads, n = {}, {}, 0
+  local start, best = 1, 0
   for i, entry in ipairs(lines) do
+    local score
     for j, line in ipairs(vim.split(entry, '\n', { plain = true })) do
       n = n + 1
       local marked, hit = highlight(line, words)
       if n > 1 and hit and (not (on or from) or in_range[i]) then
         table.insert(numbers, n)
+        if not score then
+          local text = entry:gsub('\27%[[%d;]*m', ''):lower()
+          score = 0
+          for _, w in ipairs(words) do
+            score = score + (text:find(w, 1, true) and 1 or 0)
+          end
+          if score > best or (score == best and opts.chronological) then
+            start, best = #numbers, score
+          end
+        end
       end
       if in_range[i] == 'head' and j == 1 then
         table.insert(heads, n)
@@ -1874,14 +1888,14 @@ local function show(opts, rest)
     end
   end
   if (on or from) and #numbers == 0 then
-    numbers = heads
+    numbers, start = heads, 1
   end
   io.stdout:flush()
   local file = os.getenv 'LIVEQ_MATCH_FILE'
   if file and file ~= '' then
     local f = io.open(file, 'w')
     if f then
-      f:write(id, '\n', #numbers > 0 and 1 or 0, '\n', table.concat(numbers, ' '), '\n')
+      f:write(id, '\n', #numbers > 0 and start or 0, '\n', table.concat(numbers, ' '), '\n')
       f:close()
     end
   end
