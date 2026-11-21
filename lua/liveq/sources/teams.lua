@@ -154,7 +154,159 @@ local function insert_image(buf, path)
   end
 end
 
---- A compose split for replying to chat `id`; `:w` sends the whole buffer as one message. Images go in as lines
+-- -- reply drafts by Claude ---------------------------------------------------------------------------------------
+
+-- <localleader>id in a reply split: Claude (`claude -p`, the Claude Code CLI and its login) turns the points typed in
+-- the split into drafts, given the chat's recent messages and a guide to how I write (the teams-reply skill's
+-- style.md). The split then holds sections, `── draft 1 · short ──` and so on, then `── worth adding (not sent) ──`
+-- (what the chat suggests I may have left out, as questions) and `── your points (not sent) ──`; `:w` sends the draft
+-- the cursor is in, `u` brings the points back, and <localleader>id again drafts anew from the points.
+local STYLE = vim.env.LIVEQ_TEAMS_STYLE or vim.fs.joinpath(vim.env.HOME, 'rcfiles', '.claude', 'skills', 'teams-reply', 'style.md')
+local DRAFT_MODEL = vim.env.LIVEQ_TEAMS_DRAFT_MODEL or 'sonnet'
+local HISTORY = 20 -- messages of the chat Claude sees
+local MARK = '── '
+local ATTACHMENT = '^%s*!?%[[^%]]*%]%([/~][^)]*%)%s*$'
+
+--- The sections of a split with drafts: { { title = 'draft 1 · short', first = n, last = n }, ... } (1-based lines).
+local function sections(lines)
+  local list = {}
+  for i, line in ipairs(lines) do
+    local title = line:match('^' .. MARK .. '(.-) ──$')
+    if title then
+      if #list > 0 then
+        list[#list].last = i - 1
+      end
+      table.insert(list, { title = title, first = i + 1, last = #lines })
+    end
+  end
+  return list
+end
+
+local function section_text(lines, sec)
+  return vim.trim(table.concat(vim.list_slice(lines, sec.first, sec.last), '\n'))
+end
+
+local function draft_prompt(title, history, points)
+  local file = io.open(STYLE, 'r')
+  local style = file and file:read '*a'
+    or 'Write short, direct, informal work replies; no greetings unless opening a thread, no sign-off, no emoji. Never repeat credentials.'
+  if file then
+    file:close()
+  end
+  if #history > 12000 then
+    history = '…\n' .. history:sub(-12000)
+  end
+  return table.concat({
+    'You draft my replies in a Microsoft Teams chat. Write as me, in my style:',
+    '',
+    style,
+    '',
+    ('## The chat "%s", oldest first (the last %d messages)'):format(title, HISTORY),
+    '',
+    history,
+    '',
+    '## What I want to say',
+    '',
+    points ~= '' and points or '(nothing given: reply to the latest message as I would)',
+    '',
+    '## Output',
+    '',
+    'Reply with exactly these sections and nothing else (no preamble, no code fences around the whole):',
+    '=== short',
+    'the reply as I would most likely send it',
+    '=== fuller',
+    'a somewhat fuller version, still in my style',
+    '=== worth adding',
+    '- up to three things the chat suggests I might add or ask (as short questions to me), or "- nothing"',
+  }, '\n')
+end
+
+--- Parses Claude's `=== name` sections into { { name, text } }.
+local function parse_drafts(output)
+  local list, current = {}, nil
+  for _, line in ipairs(vim.split(output, '\n', { plain = true })) do
+    local name = line:match '^===%s*(.-)%s*$'
+    if name then
+      current = { name = name, lines = {} }
+      table.insert(list, current)
+    elseif current then
+      table.insert(current.lines, line)
+    end
+  end
+  return vim.tbl_map(function(d)
+    return { name = d.name, text = vim.trim(table.concat(d.lines, '\n')) }
+  end, list)
+end
+
+--- Drafts a reply to chat `id` from the points in reply split `buf` (see above).
+local function draft(source, id, title, buf)
+  if vim.fn.executable 'claude' ~= 1 then
+    vim.notify('No `claude` command (Claude Code) on PATH', vim.log.levels.WARN, { title = 'Teams' })
+    return
+  end
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local secs = sections(lines)
+  local points_lines = lines
+  for _, sec in ipairs(secs) do
+    if sec.title:match '^your points' then
+      points_lines = vim.list_slice(lines, sec.first, sec.last)
+    end
+  end
+  if #secs > 0 and points_lines == lines then
+    points_lines = {} -- drafts without the points section: draft from the chat alone
+  end
+  -- attached images and files stay out of Claude's hands: kept as they are, added to every draft
+  local points, attached = {}, {}
+  for _, line in ipairs(points_lines) do
+    table.insert(line:match(ATTACHMENT) and attached or points, line)
+  end
+  local points_text = vim.trim(table.concat(points, '\n'))
+  vim.notify(('Drafting with Claude (%s)…'):format(DRAFT_MODEL), vim.log.levels.INFO, { title = 'Teams' })
+  run_async(source, { 'show', '--plain', '--chronological', '--count', tostring(HISTORY), '--', id }, function(history)
+    local prompt = draft_prompt(title, history, points_text)
+    local cmd = { 'claude', '-p', '--model', DRAFT_MODEL, '--tools', '', '--strict-mcp-config', '--no-session-persistence' }
+    -- from a neutral directory, so that no project's CLAUDE.md comes along
+    vim.system(cmd, { stdin = prompt, text = true, cwd = vim.fn.stdpath 'cache', timeout = 120000 }, function(result)
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(buf) then
+          return
+        end
+        local drafts = result.code == 0 and parse_drafts(result.stdout or '') or {}
+        if #drafts == 0 then
+          local why = vim.trim((result.stderr or '') .. ' ' .. (result.stdout or ''))
+          vim.notify('Claude gave no drafts: ' .. (why ~= '' and why:sub(1, 300) or ('exit ' .. result.code)), vim.log.levels.ERROR, { title = 'Teams' })
+          return
+        end
+        local out, n = {}, 0
+        for _, d in ipairs(drafts) do
+          if d.name:match '^worth' then
+            vim.list_extend(out, { MARK .. 'worth adding (not sent) ──' })
+            vim.list_extend(out, vim.split(d.text, '\n', { plain = true }))
+          elseif d.text ~= '' then
+            n = n + 1
+            table.insert(out, ('%sdraft %d · %s ──'):format(MARK, n, d.name))
+            vim.list_extend(out, vim.split(d.text, '\n', { plain = true }))
+            vim.list_extend(out, attached)
+          end
+          table.insert(out, '')
+        end
+        table.insert(out, MARK .. 'your points (not sent) ──')
+        vim.list_extend(out, points)
+        vim.list_extend(out, attached)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, out)
+        local win = vim.fn.bufwinid(buf)
+        if win ~= -1 then
+          vim.api.nvim_win_set_height(win, math.min(#out + 1, math.floor(vim.o.lines / 2)))
+          vim.api.nvim_win_set_cursor(win, { 2, 0 })
+        end
+        vim.notify('Drafts ready: put the cursor in one and :w sends it', vim.log.levels.INFO, { title = 'Teams' })
+      end)
+    end)
+  end, { LIVEQ_WIDTH = '100' })
+end
+
+--- A compose split for replying to chat `id`; `:w` sends the whole buffer as one message (with drafts, the draft the
+--- cursor is in). Images go in as lines
 --- `![name](path)`, sent inline, other files as `[name](path)`, attached (uploaded to OneDrive and shared with the
 --- chat, as Teams does): <localleader>ip pastes the clipboard's image, <localleader>ia attaches a file (the prompt
 --- starts with the clipboard's file; at a prompt, ctrl-r + pastes the clipboard, since ctrl-v inserts a key literally).
@@ -170,7 +322,10 @@ function M.reply(source, id, title)
   pcall(vim.api.nvim_buf_set_name, buf, 'teams-reply://' .. title .. ' [' .. buf .. ']')
   vim.wo.winbar = '%#Title# Reply to '
     .. title:gsub('%%', '%%%%')
-    .. '%*  %#Comment#:w sends (asks first) · :q! drops · <localleader>ip paste image · <localleader>ia attach file%*'
+    .. '%*  %#Comment#:w sends (asks first) · :q! drops · <localleader>id draft with Claude · <localleader>ip paste image · <localleader>ia attach file%*'
+  vim.keymap.set('n', '<localleader>id', function()
+    draft(source, id, title, buf)
+  end, { buffer = buf, desc = 'Teams: draft the reply with Claude' })
   vim.keymap.set('n', '<localleader>ip', function()
     local path, why = clipboard_image()
     if not path then
@@ -197,6 +352,19 @@ function M.reply(source, id, title)
     buffer = buf,
     callback = function()
       local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+      -- with drafts, the one the cursor is in
+      local secs = sections(lines)
+      if #secs > 0 then
+        local row = vim.api.nvim_win_get_cursor(0)[1]
+        local sec = vim.tbl_filter(function(s)
+          return row >= s.first - 1 and row <= s.last
+        end, secs)[1]
+        if not (sec and sec.title:match '^draft') then
+          vim.notify('Put the cursor in the draft to send', vim.log.levels.WARN, { title = 'Teams' })
+          return
+        end
+        lines = vim.split(section_text(lines, sec), '\n', { plain = true })
+      end
       local text = vim.trim(table.concat(lines, '\n'))
       if text == '' then
         vim.notify('Nothing to send', vim.log.levels.WARN, { title = 'Teams' })
