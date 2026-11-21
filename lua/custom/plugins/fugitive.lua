@@ -5,6 +5,9 @@ return {
     'nagakiran/vim-fugitive',
     branch = 'personal',
     config = function()
+      -- Highlight the changed words inside -/+ line pairs of inline diffs (lua/gitworddiff.lua)
+      require('gitworddiff').setup()
+
       -- Close all diff windows from any pane (fugitive's dq only exists on blob side panes,
       -- not on the working file where you actually edit during 3-way merge resolution)
       vim.keymap.set('n', 'dq', function()
