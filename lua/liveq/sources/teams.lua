@@ -77,7 +77,82 @@ function M.load(source, buf)
   end, { LIVEQ_WIDTH = tostring(width) })
 end
 
---- A compose split for replying to chat `id`; `:w` sends the whole buffer as one message.
+local OUTGOING = vim.fs.joinpath(vim.fn.stdpath 'cache', 'liveq', 'teams', 'outgoing')
+
+--- Saves the image on the clipboard as a PNG file and returns its path; nil and why not.
+local function clipboard_image()
+  vim.fn.mkdir(OUTGOING, 'p')
+  local path = vim.fs.joinpath(OUTGOING, ('%s-%03d.png'):format(os.date '%Y%m%d-%H%M%S', math.floor(vim.uv.hrtime() / 1e6) % 1000))
+  local cmd
+  if vim.fn.has 'mac' == 1 and vim.fn.executable 'pngpaste' == 1 then
+    cmd = { 'pngpaste', path }
+  elseif vim.fn.has 'mac' == 1 then
+    cmd = {
+      'osascript',
+      '-e',
+      ('set f to open for access POSIX file "%s" with write permission'):format(path),
+      '-e',
+      'write (the clipboard as «class PNGf») to f',
+      '-e',
+      'close access f',
+    }
+  elseif vim.env.WAYLAND_DISPLAY and vim.fn.executable 'wl-paste' == 1 then
+    cmd = { 'sh', '-c', 'wl-paste --type image/png > "$1"', 'sh', path }
+  elseif vim.env.DISPLAY and vim.fn.executable 'xclip' == 1 then
+    cmd = { 'sh', '-c', 'xclip -selection clipboard -t image/png -o > "$1"', 'sh', path }
+  else
+    return nil, 'no way to read an image from the clipboard here (pngpaste/osascript, wl-paste or xclip)'
+  end
+  local result = vim.system(cmd, { text = true }):wait(10000)
+  local stat = vim.uv.fs_stat(path)
+  if result.code ~= 0 or not stat or stat.size == 0 then
+    os.remove(path)
+    return nil, 'no image on the clipboard'
+  end
+  return path
+end
+
+--- The file on the clipboard, when there is one: a file copied in Finder (macOS), else a path copied as text (quoted,
+--- ~/, file:// all right). nil otherwise.
+local function clipboard_file()
+  if vim.fn.has 'mac' == 1 then
+    local result = vim.system({ 'osascript', '-e', 'POSIX path of (the clipboard as «class furl»)' }, { text = true }):wait(3000)
+    local path = vim.trim(result.stdout or '')
+    if result.code == 0 and path ~= '' and vim.uv.fs_stat(path) then
+      return path
+    end
+  end
+  local ok, text = pcall(vim.fn.getreg, '+')
+  text = ok and vim.trim(text or ''):gsub('^[\'"]', ''):gsub('[\'"]$', '') or ''
+  if text == '' or text:find '\n' then
+    return nil
+  end
+  text = text:gsub('^file://[^/]*', ''):gsub('%%(%x%x)', function(h)
+    return string.char(tonumber(h, 16))
+  end)
+  local path = vim.fn.fnamemodify(vim.fn.expand(text), ':p')
+  return vim.uv.fs_stat(path) and path or nil
+end
+
+--- Puts `![name](path)` on a line of its own below the cursor (on the cursor's line when it is empty).
+local function insert_image(buf, path)
+  local win = vim.fn.bufwinid(buf)
+  local row = win ~= -1 and vim.api.nvim_win_get_cursor(win)[1] or vim.api.nvim_buf_line_count(buf)
+  local line = ('![%s](%s)'):format(vim.fs.basename(path), path)
+  if vim.trim(vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or '') == '' then
+    vim.api.nvim_buf_set_lines(buf, row - 1, row, false, { line })
+  else
+    vim.api.nvim_buf_set_lines(buf, row, row, false, { line })
+    row = row + 1
+  end
+  if win ~= -1 then
+    vim.api.nvim_win_set_cursor(win, { row, #line })
+  end
+end
+
+--- A compose split for replying to chat `id`; `:w` sends the whole buffer as one message. Images go in as lines
+--- `![name](path)`, sent inline: <localleader>ip pastes the clipboard's, <localleader>ia attaches a file (the prompt
+--- starts with the clipboard's file; at a prompt, ctrl-r + pastes the clipboard, since ctrl-v inserts a key literally).
 function M.reply(source, id, title)
   vim.cmd 'botright 8new'
   local buf = vim.api.nvim_get_current_buf()
@@ -88,7 +163,31 @@ function M.reply(source, id, title)
   vim.b[buf].teams_chat = id
   vim.b[buf].teams_reply = true
   pcall(vim.api.nvim_buf_set_name, buf, 'teams-reply://' .. title .. ' [' .. buf .. ']')
-  vim.wo.winbar = '%#Title# Reply to ' .. title:gsub('%%', '%%%%') .. '%*  %#Comment#:w sends (asks first) · :q! drops%*'
+  vim.wo.winbar = '%#Title# Reply to '
+    .. title:gsub('%%', '%%%%')
+    .. '%*  %#Comment#:w sends (asks first) · :q! drops · <localleader>ip paste image · <localleader>ia attach image%*'
+  vim.keymap.set('n', '<localleader>ip', function()
+    local path, why = clipboard_image()
+    if not path then
+      vim.notify(why, vim.log.levels.WARN, { title = 'Teams' })
+      return
+    end
+    insert_image(buf, path)
+  end, { buffer = buf, desc = 'Teams: paste the clipboard image' })
+  vim.keymap.set('n', '<localleader>ia', function()
+    -- starts with the file on the clipboard, if any (copied in Finder, or its path as text)
+    vim.ui.input({ prompt = 'Image to attach: ', completion = 'file', default = clipboard_file() }, function(input)
+      if not input or vim.trim(input) == '' then
+        return
+      end
+      local path = vim.fn.fnamemodify(vim.fn.expand(vim.trim(input)), ':p')
+      if not vim.uv.fs_stat(path) then
+        vim.notify('No such file: ' .. path, vim.log.levels.WARN, { title = 'Teams' })
+        return
+      end
+      insert_image(buf, path)
+    end)
+  end, { buffer = buf, desc = 'Teams: attach an image file' })
   vim.api.nvim_create_autocmd('BufWriteCmd', {
     buffer = buf,
     callback = function()
@@ -100,6 +199,12 @@ function M.reply(source, id, title)
       end
       local first = vim.split(text, '\n', { plain = true })
       local shown = table.concat(vim.list_slice(first, 1, 3), '\n') .. (#first > 3 and '\n…' or '')
+      local images = #vim.tbl_filter(function(l)
+        return l:match '^%s*!%[[^%]]*%]%(.-%)%s*$' ~= nil
+      end, first)
+      if images > 0 then
+        shown = shown .. ('\n\n(with %d image%s)'):format(images, images == 1 and '' or 's')
+      end
       if vim.fn.confirm(('Send to %s?\n\n%s'):format(title, shown), '&Send\n&Cancel', 2) ~= 1 then
         return
       end

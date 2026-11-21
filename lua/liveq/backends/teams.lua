@@ -9,7 +9,8 @@
 --   nvim -l teams.lua url -- CHAT_ID                       the chat in the Teams web client
 --   nvim -l teams.lua refresh                              fetch the chat list (and new members) into the cache
 --   nvim -l teams.lua refresh --deep [N]                   ...then backfill every chat's history to N messages (300)
---   nvim -l teams.lua send [--file PATH] -- CHAT_ID [TEXT] post a message (TEXT, or the file's contents)
+--   nvim -l teams.lua send [--file PATH] -- CHAT_ID [TEXT] post a message (TEXT, or the file's contents); a line
+--                                                          `![...](PATH)` sends that image inline
 --   nvim -l teams.lua read -- CHAT_ID                      mark the chat read, as opening it in Teams does
 --   nvim -l teams.lua show --match QUERY -- CHAT_ID         the preview, with the query's words highlighted (with
 --                                                          --plain, not highlighted: for liveq's buffer and float);
@@ -2250,7 +2251,40 @@ local function html_escape(s)
   return (s:gsub('&', '&amp;'):gsub('<', '&lt;'):gsub('>', '&gt;'):gsub('"', '&quot;'))
 end
 
---- Posts a message to a chat. Multi-line text keeps its lines (as <br>); it is never sent empty.
+local IMAGE_TYPES = { ['\137PNG'] = 'image/png', ['\255\216\255'] = 'image/jpeg', ['GIF8'] = 'image/gif' }
+
+--- An image file to send: its bytes, MIME type and size (PNG's, from its header), or nil and why not.
+local function outgoing_image(path)
+  path = vim.fn.expand(path)
+  local f = io.open(path, 'rb')
+  if not f then
+    return nil, 'cannot read ' .. path
+  end
+  local bytes = f:read '*a'
+  f:close()
+  local mime
+  for magic, type in pairs(IMAGE_TYPES) do
+    if bytes:sub(1, #magic) == magic then
+      mime = type
+    end
+  end
+  if not mime then
+    return nil, path .. ' is not a PNG, JPEG or GIF image (other files would need OneDrive: Files.ReadWrite)'
+  end
+  local w, h
+  if mime == 'image/png' and #bytes >= 24 then
+    local function u32(i)
+      local a, b, c, d = bytes:byte(i, i + 3)
+      return ((a * 256 + b) * 256 + c) * 256 + d
+    end
+    w, h = u32(17), u32(21)
+  end
+  return { bytes = bytes, mime = mime, w = w, h = h }
+end
+
+--- Posts a message to a chat. Multi-line text keeps its lines (as <br>); it is never sent empty. A line that is just
+--- an image in Markdown, `![...](PATH)`, sends that image inline in the message (Graph's hosted contents, which
+--- Chat.ReadWrite allows), where the line is.
 local function send(opts, rest)
   local id = rest[1]
   if not id or not id:match '^%d+:' then
@@ -2274,8 +2308,32 @@ local function send(opts, rest)
   if text == '' then
     fail 'send: the message is empty'
   end
-  local html = html_escape(text):gsub('\r?\n', '<br>')
-  local reply, err = api('POST', '/chats/' .. id .. '/messages', { body = { contentType = 'html', content = html } })
+  local parts, hosted = {}, {}
+  for _, line in ipairs(vim.split(text, '\r?\n')) do
+    local path = line:match '^%s*!%[[^%]]*%]%((.-)%)%s*$'
+    if path then
+      local img, why = outgoing_image(path)
+      if not img then
+        fail('send: ' .. why)
+      end
+      local n = tostring(#hosted + 1)
+      table.insert(hosted, { ['@microsoft.graph.temporaryId'] = n, contentBytes = vim.base64.encode(img.bytes), contentType = img.mime })
+      -- shown at most 600 pixels wide, as Teams shows a pasted screenshot
+      local size = ''
+      if img.w and img.h and img.w > 0 then
+        local w = math.min(img.w, 600)
+        size = (' width="%d" height="%d"'):format(w, math.floor(img.h * w / img.w + 0.5))
+      end
+      table.insert(parts, ('<img src="../hostedContents/%s/$value" alt="image"%s>'):format(n, size))
+    else
+      table.insert(parts, html_escape(line))
+    end
+  end
+  local message = { body = { contentType = 'html', content = table.concat(parts, '<br>') } }
+  if #hosted > 0 then
+    message.hostedContents = hosted
+  end
+  local reply, err = api('POST', '/chats/' .. id .. '/messages', message)
   if not reply then
     fail('send: ' .. err)
   end
