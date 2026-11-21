@@ -2,6 +2,7 @@
 --
 --   nvim -l teams.lua search -f fzf -l LIMIT -- QUERY      chats from the on-disk cache, newest activity first
 --   nvim -l teams.lua show [--plain] [--chronological] [--count N] [--fresh] -- CHAT_ID   (--fresh skips the cache)
+--   nvim -l teams.lua show --images -- CHAT_ID             ...with the images pasted into messages drawn (see images)
 --   nvim -l teams.lua complete -f json [-c CURSOR] -- QUERY
 --   nvim -l teams.lua url -- CHAT_ID                       the chat in the Teams web client
 --   nvim -l teams.lua refresh                              fetch the chat list (and new members) into the cache
@@ -142,7 +143,7 @@ local function parse(args)
     if a == '--' then
       vim.list_extend(rest, vim.list_slice(args, i + 1))
       break
-    elseif a == '--plain' or a == '--chronological' or a == '--fresh' or a == '--quiet' then
+    elseif a == '--plain' or a == '--chronological' or a == '--fresh' or a == '--quiet' or a == '--images' then
       opts[a:sub(3)] = true
       i = i + 1
     elseif a:match '^%-' and args[i + 1] then
@@ -417,8 +418,9 @@ local function strip_tags(s)
 end
 
 --- The text of a message body. `attachments` resolves the `<attachment id=...>` placeholders: quoted replies
---- (messageReference) become `> Sender: preview` lines, files become `[file: name] url`.
-local function body_text(body, attachments)
+--- (messageReference) become `> Sender: preview` lines, files become `[file: name] url`. Images pasted into the message
+--- (hosted by Teams) become `[image]`, and when `images` is given, their URL and size are added to it in that order.
+local function body_text(body, attachments, images)
   if not body or not body.content then
     return ''
   end
@@ -461,6 +463,20 @@ local function body_text(body, attachments)
     return (text == href or text == '') and href or (text .. ' <' .. href .. '>')
   end)
   s = s:gsub('<emoji[^>]-alt="([^"]*)"[^>]*>.-</emoji>', '%1')
+  s = s:gsub('<img[^>]*>', function(tag)
+    local src = tag:match 'src="([^"]*/hostedContents/[^"]*)"'
+    if not src then
+      return nil
+    end
+    if images then
+      table.insert(images, {
+        url = entities(src),
+        w = tonumber(tag:match 'width="([%d.]+)"'),
+        h = tonumber(tag:match 'height="([%d.]+)"'),
+      })
+    end
+    return '[image]'
+  end)
   s = s:gsub('<img[^>]-alt="([^"]+)"[^>]*>', '%1')
   s = s:gsub('<img[^>]*>', '[image]')
   s = s:gsub('<li[^>]*>', '\n- ')
@@ -564,7 +580,8 @@ local function call_info(detail)
 end
 
 local function trim_message(m)
-  local text = body_text(m.body, m.attachments)
+  local images = {}
+  local text = body_text(m.body, m.attachments, images)
   -- an entry of the call log: Graph leaves only the call's id (and the time it ended)
   local logged = m.chatId == CALL_LOG and text:match 'Call Logs for Call (%S+)'
   return {
@@ -579,6 +596,9 @@ local function trim_message(m)
     call = logged and { id = logged } or call_info(m.eventDetail),
     subject = m.subject,
     text = text,
+    -- present (if empty) whenever the text says image, so `show --images` can tell a message cached before images
+    -- were kept (its pasted images then read "image", their alt text) and fetch it again
+    images = (#images > 0 or text:lower():find('image', 1, true)) and images or nil,
     reactions = vim.tbl_map(function(r)
       return r.displayName or r.reactionType
     end, m.reactions or {}),
@@ -1573,6 +1593,184 @@ local function reaction_summary(list)
     .. ']'
 end
 
+-- -- images -------------------------------------------------------------------------------------------------------
+
+-- `show --images` draws the images pasted into messages in the preview, where the text says [image]. They are fetched
+-- from Graph once into the cache (keyed by URL) and drawn by chafa as coloured block characters, which fzf shows
+-- anywhere, Neovim's :terminal (fzf-lua's picker) included. In fzf straight in kitty or Ghostty (the shell's `lq`), the
+-- kitty protocol's unicode placeholders show real pixels that scroll with the text, through tmux too (with
+-- allow-passthrough). LIVEQ_TEAMS_IMAGE_FORMAT forces one: symbols, kitty, sixels or iterm (the last two need a
+-- terminal and an fzf that pass them, never Neovim's). Real images fill the preview's height; LIVEQ_TEAMS_IMAGE_ROWS
+-- caps the block art's (16 lines), LIVEQ_TEAMS_IMAGE_MAX the images drawn per preview (12, the newest), the rest
+-- staying [image].
+local IMAGES = CACHE .. '/images'
+local IMAGE_ROWS = tonumber(os.getenv 'LIVEQ_TEAMS_IMAGE_ROWS') or 16
+local IMAGE_MAX = tonumber(os.getenv 'LIVEQ_TEAMS_IMAGE_MAX') or 12
+local IMAGE_LINE = '\6' -- starts each line of a drawn image: never highlighted, dropped on output
+-- liveq's picker in Neovim draws the real images over the block art (liveq/images.lua): it names a file for where they
+-- are, and the shape of a cell, so the art has the image's shape and fills the preview's height (as the image will)
+local OVERLAY = os.getenv 'LIVEQ_IMAGE_FILE'
+OVERLAY = OVERLAY ~= '' and OVERLAY or nil
+local FONT_RATIO = os.getenv 'LIVEQ_FONT_RATIO'
+
+local function image_format()
+  local forced = os.getenv 'LIVEQ_TEAMS_IMAGE_FORMAT'
+  if forced and forced ~= '' then
+    return forced
+  end
+  local kitty = os.getenv 'KITTY_WINDOW_ID' or os.getenv 'GHOSTTY_RESOURCES_DIR' or (os.getenv 'TERM' or ''):match 'kitty'
+  -- Neovim's terminal (fzf-lua) drops the kitty protocol, though the variables say kitty
+  if kitty and not os.getenv 'NVIM' and vim.fn.executable 'kitten' == 1 then
+    return 'kitty'
+  end
+  return vim.fn.executable 'chafa' == 1 and 'symbols' or nil
+end
+
+--- Downloads the images not cached yet (in parallel); sets `file` on each one there.
+local function fetch_images(images)
+  local jobs = {}
+  for _, img in ipairs(images) do
+    img.file = IMAGES .. '/' .. vim.fn.sha256(img.url):sub(1, 32)
+    if not vim.uv.fs_stat(img.file) then
+      if not token() then
+        img.file = nil
+      else
+        vim.fn.mkdir(IMAGES, 'p')
+        local part = img.file .. '.' .. vim.uv.os_getpid() .. '.part'
+        local cmd = { 'curl', '-sSf', '--max-time', '30', '-H', '@' .. HEADER_FILE, '-o', part, img.url }
+        table.insert(jobs, { img = img, part = part, job = vim.system(cmd) })
+      end
+    end
+  end
+  for _, j in ipairs(jobs) do
+    if j.job:wait(35000).code == 0 then
+      os.rename(j.part, j.img.file)
+    else
+      os.remove(j.part)
+      j.img.file = nil
+    end
+  end
+end
+
+--- The lines of kitten's unicode-placeholder output as fzf can show them: the image's transmission ahead of the first
+--- line, the colour that carries the image's id on every line, no cursor moves.
+local function kitty_lines(output)
+  local transmit, rest = output:match '^\r?(.*\27\\)(.*)$'
+  if not transmit then
+    return nil
+  end
+  local colour = rest:match '\27%[38[:;][%d:;]*m'
+  if not colour then
+    return nil
+  end
+  colour = colour:gsub(':', ';')
+  rest = rest:gsub('\27%[38[:;][%d:;]*m', ''):gsub('\27%[39m', ''):gsub('\27[78]', ''):gsub('\27%[%d*;?%d*H', '')
+  local lines = {}
+  for line in vim.gsplit(rest, '\n', { plain = true }) do
+    line = line:gsub('\r', ''):gsub('\27%[%d*C', '')
+    if line ~= '' then
+      table.insert(lines, colour .. line .. '\27[39m')
+    end
+  end
+  if #lines > 0 then
+    lines[1] = transmit .. lines[1]
+  end
+  return lines
+end
+
+--- Draws `images` (from messages' `images`) `width` columns wide at most; sets `lines` on each one drawn.
+local function draw_images(images, width, format)
+  format = format or (OVERLAY and vim.fn.executable 'chafa' == 1 and 'symbols') or image_format()
+  if not format or #images == 0 then
+    return
+  end
+  fetch_images(images)
+  local jobs = {}
+  for _, img in ipairs(images) do
+    if img.file and not img.lines then
+      -- block art about as wide as Teams shows it (a cell is some 8 pixels wide), within the preview; a real image
+      -- (kitty's, or the picker's over the art) as large as the preview allows, so its text can be read
+      local cols, rows = width, IMAGE_ROWS
+      if OVERLAY or format == 'kitty' then
+        rows = math.max(IMAGE_ROWS, (tonumber(os.getenv 'FZF_PREVIEW_LINES') or 30) - 2)
+      elseif img.w and img.w > 0 then
+        cols = math.max(8, math.min(width, math.ceil(img.w / 8)))
+      end
+      local cmd = format == 'kitty'
+          and {
+            'kitten',
+            'icat',
+            '--stdin=no',
+            '--unicode-placeholder',
+            -- a stream, not shared memory, so fzf can send it again when the preview scrolls back to it
+            '--transfer-mode=stream',
+            '--background=white', -- behind transparent pixels
+            -- kitten's own conversion (0.46) turns some white areas of screenshots black; ImageMagick's does not
+            vim.fn.executable 'magick' == 1 and '--engine=magick' or '--engine=auto',
+            ('--place=%dx%d@0x0'):format(cols, rows),
+            img.file,
+          }
+        or {
+          'chafa',
+          '-f',
+          format,
+          '-s',
+          ('%dx%d'):format(cols, rows),
+          '--animate=off',
+          '--polite=on',
+          '--font-ratio=' .. (FONT_RATIO or '1/2'),
+          img.file,
+        }
+      local ok, job = pcall(vim.system, cmd, { text = true })
+      if ok then
+        table.insert(jobs, { img = img, job = job })
+      end
+    end
+  end
+  for _, j in ipairs(jobs) do
+    local result = j.job:wait(10000)
+    local output = result.code == 0 and result.stdout or ''
+    local lines
+    if format == 'kitty' then
+      lines = kitty_lines(output)
+    elseif output ~= '' then
+      lines = vim.split(output:gsub('\n$', ''), '\n', { plain = true })
+    end
+    if lines and #lines > 0 then
+      -- the box the art fills, which the real image is drawn into (chafa's art is a character per cell)
+      j.img.rows = #lines
+      j.img.cols = vim.fn.strdisplaywidth((lines[1]:gsub('\27%[[%d;]*m', '')))
+      for i, line in ipairs(lines) do
+        lines[i] = IMAGE_LINE .. line .. '\27[0m'
+      end
+      j.img.lines = lines
+    end
+  end
+  -- kitten fails where it finds no terminal to ask the size of a cell: block art instead
+  if format == 'kitty' and #jobs > 0 and not jobs[1].img.lines and vim.fn.executable 'chafa' == 1 then
+    draw_images(images, width, 'symbols')
+  end
+end
+
+--- The text of message `m` with each [image] that has a drawing replaced by it (on lines of their own); for the
+--- picker's real images, below a caption `[image K/N]` that tells it where image K is.
+local function with_images(text, m, total)
+  local i = 0
+  return (
+    text
+      :gsub('%[image%]', function()
+        i = i + 1
+        local img = m.images and m.images[i]
+        if img and img.lines then
+          local caption = OVERLAY and img.n and (IMAGE_LINE .. ('\27[2m[image %d/%d]\27[0m'):format(img.n, total) .. '\n') or ''
+          return '\n' .. caption .. table.concat(img.lines, '\n') .. '\n'
+        end
+      end)
+      :gsub('^\n+', '')
+      :gsub('\n+$', '')
+  )
+end
+
 local function show(opts, rest)
   local id = rest[1]
   if not id or not id:match '^%d+:' then
@@ -1599,6 +1797,22 @@ local function show(opts, rest)
     list = vim.list_slice(list, 1, tonumber(opts.count) or (searching and 100000) or 300)
   else
     list, err = messages(chat, chat.id == CALL_LOG and math.min(want, 50) or want, opts.fresh, searching)
+    -- messages cached before images were kept: fetch the newest again (they are merged into the cache), once
+    local images = opts.images and not plain and list
+    if images and not opts.fresh then
+      for i = 1, math.min(#images, 50) do
+        local m = images[i]
+        if m.type == 'message' and not m.images and (m.text or ''):lower():find('image', 1, true) then
+          messages(chat, 50, true)
+          list, err = messages(chat, chat.id == CALL_LOG and math.min(want, 50) or want, false, searching)
+          break
+        end
+      end
+    end
+  end
+  if not list then
+    out((plain and '' or '\27[31m') .. 'Cannot fetch the messages: ' .. err .. (plain and '' or '\27[0m'))
+    return
   end
   if not list then
     out((plain and '' or '\27[31m') .. 'Cannot fetch the messages: ' .. err .. (plain and '' or '\27[0m'))
@@ -1645,6 +1859,37 @@ local function show(opts, rest)
     end
     if added then
       table.sort(list, by_time_desc)
+    end
+  end
+  local draw = opts.images and not plain
+  local drawn = 0 -- images with a caption, for the picker's real ones
+  if draw then
+    local images = {}
+    for _, m in ipairs(list) do
+      for _, img in ipairs(m.type == 'message' and not m.deleted and m.images or {}) do
+        if #images < IMAGE_MAX then
+          table.insert(images, img)
+        end
+      end
+    end
+    local width = tonumber(os.getenv 'FZF_PREVIEW_COLUMNS') or tonumber(os.getenv 'LIVEQ_WIDTH') or 80
+    draw_images(images, math.max(8, width - 1))
+    if OVERLAY then
+      -- written before any output, so that the picker never pairs a caption with the previous preview's file
+      local rows, n = {}, 0
+      for _, img in ipairs(images) do
+        if img.lines then
+          n = n + 1
+          img.n = n
+          table.insert(rows, ('%d\t%d\t%d\t%s'):format(n, img.cols, img.rows, img.file))
+        end
+      end
+      drawn = n
+      local f = io.open(OVERLAY, 'w')
+      if f then
+        f:write(table.concat(rows, '\n'), '\n')
+        f:close()
+      end
     end
   end
   if opts.chronological then
@@ -1844,7 +2089,7 @@ local function show(opts, rest)
       if m.subject and m.subject ~= '' then
         table.insert(lines, plain and ('**' .. m.subject .. '**') or ('\27[1m' .. m.subject .. '\27[0m'))
       end
-      table.insert(lines, render_quotes(m.text, plain))
+      table.insert(lines, render_quotes(draw and with_images(m.text, m, drawn) or m.text, plain))
       table.insert(lines, '')
     end
     -- the message counts for `on:` and `from:` (the preview jumps to those of the day, or of the sender)
@@ -1855,7 +2100,7 @@ local function show(opts, rest)
     end
   end
   if not searching then
-    out(table.concat(lines, '\n'))
+    out((table.concat(lines, '\n'):gsub(IMAGE_LINE, '')))
     return
   end
   -- highlight the words, and tell liveq's picker the lines that have them, so the preview scrolls to the first; with
@@ -1869,11 +2114,16 @@ local function show(opts, rest)
     local score
     for j, line in ipairs(vim.split(entry, '\n', { plain = true })) do
       n = n + 1
-      local marked, hit = highlight(line, words)
+      local marked, hit
+      if line:sub(1, 1) == IMAGE_LINE then
+        marked, line = line:sub(2), line:sub(2) -- a drawn image: its escapes and data are not text to highlight
+      else
+        marked, hit = highlight(line, words)
+      end
       if n > 1 and hit and (not (on or from) or in_range[i]) then
         table.insert(numbers, n)
         if not score then
-          local text = entry:gsub('\27%[[%d;]*m', ''):lower()
+          local text = entry:gsub(IMAGE_LINE .. '[^\n]*', ''):gsub('\27%[[%d;]*m', ''):lower()
           score = 0
           for _, w in ipairs(words) do
             score = score + (text:find(w, 1, true) and 1 or 0)

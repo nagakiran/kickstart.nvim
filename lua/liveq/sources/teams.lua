@@ -191,6 +191,10 @@ return function(opts)
 
     url = true,
     match = true, -- `show --match QUERY` highlights the words and opens the preview at the message found
+    -- draw the images pasted into messages in the preview (see the backend's "images"): chafa's block art, with the
+    -- real image over it by image.nvim where it can draw (liveq/images.lua)
+    preview_toggles = { ['alt-i'] = { flag = '--images', desc = 'images' } },
+    images = true,
 
     id_pattern = '^%d+:%S+$',
 

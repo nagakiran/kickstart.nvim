@@ -213,6 +213,17 @@ function M.search(source, query)
     fzf_keymap['focus'] = 'change-preview-window(+1)+change-preview-label()'
     table.insert(header, 'alt-n/p match')
   end
+  -- a source whose `show --images` draws images gets them drawn for real over its block art, by image.nvim (images.lua)
+  local image_env, on_create = '', nil
+  if source.images then
+    source.image_state = source.image_state or vim.fn.tempname()
+    image_env = require('liveq.images').env(source.image_state)
+    if image_env ~= '' then
+      on_create = function(e)
+        require('liveq.images').attach(e.bufnr, source.image_state)
+      end
+    end
+  end
   -- alt-x opens the links of the preview: a copy of it is kept in a file (`tee`), and `cli.lua links` opens the link of
   -- the message at the current match when it has just one, else lists them all on the terminal, nearest first
   source.preview_state = source.preview_state or vim.fn.tempname()
@@ -332,8 +343,8 @@ function M.search(source, query)
     search = query,
     exec_empty_query = true,
     keymap = { fzf = fzf_keymap },
-    winopts = { title = ' ' .. source.title .. ' ', preview = { layout = 'vertical', vertical = 'down:50%' } },
-    preview = preview_prefix .. backend .. ' show' .. preview_flags .. preview_match .. ' -- {1}' .. preview_tee .. preview_suffix,
+    winopts = { title = ' ' .. source.title .. ' ', preview = { layout = 'vertical', vertical = 'down:50%' }, on_create = on_create },
+    preview = image_env .. preview_prefix .. backend .. ' show' .. preview_flags .. preview_match .. ' -- {1}' .. preview_tee .. preview_suffix,
     fzf_opts = {
       ['--listen'] = source.match and true or nil, -- exports $FZF_PORT to the preview command
       ['--ansi'] = true,
