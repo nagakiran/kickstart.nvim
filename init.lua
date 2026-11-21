@@ -315,6 +315,13 @@ require('liveq').setup {
       commands = { search = 'TeamsChats', query = 'TeamsQuery', resume = 'TeamsResume' },
       keymaps = { search = '<leader>ts', resume = '<leader>tr' },
     },
+    -- copilot-api's request log (only where the proxy has run and sqlite3 is installed)
+    copilot = vim.fn.executable 'sqlite3' == 1 and vim.uv.fs_stat(
+      vim.env.COPILOT_API_SQLITE_DB_PATH or vim.fs.joinpath(vim.env.HOME, '.local/share/copilot-api/copilot-api.sqlite')
+    ) and require 'liveq.sources.copilot' {
+      commands = { search = 'CopilotUsage', query = 'CopilotUsageQuery', resume = 'CopilotUsageResume' },
+      keymaps = { search = '<leader>Cs', resume = '<leader>Cr' },
+    } or nil,
   },
 }
 

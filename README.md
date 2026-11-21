@@ -42,7 +42,7 @@ On top of the list above, this config uses a few things that live outside Neovim
 
 | Step | What | Used by | By hand |
 |---|---|---|---|
-| `system` | build tools, ripgrep, fd, xclip, w3m; on Linux also pyenv's Python build dependencies | telescope, treesitter, pyenv; w3m renders HTML mail in liveq's notmuch previews (without it, a cruder built-in conversion) | macOS: `xcode-select --install; brew install ripgrep fd xz w3m`. Ubuntu: the `apt_install` list in the script |
+| `system` | build tools, ripgrep, fd, xclip, w3m, sqlite3; on Linux also pyenv's Python build dependencies | telescope, treesitter, pyenv; w3m renders HTML mail in liveq's notmuch previews (without it, a cruder built-in conversion); sqlite3 reads copilot-api's request log for liveq's `copilot` source (without it, or without the log, the source is not registered) | macOS: `xcode-select --install; brew install ripgrep fd xz w3m` (sqlite3 ships with macOS). Ubuntu: the `apt_install` list in the script |
 | `pyenv` | [pyenv](https://github.com/pyenv/pyenv) | the next step | macOS: `brew install pyenv`. Linux: `curl -fsSL https://pyenv.run \| bash` |
 | `python` | pyenv Python 3.13.2 and a venv named `myenv` with `pynvim` | `python3_host_prog` (taskwiki and other Python plugins), pyright's `venv` | `pyenv install 3.13.2 && ~/.pyenv/versions/3.13.2/bin/python -m venv ~/.pyenv/versions/myenv && ~/.pyenv/versions/myenv/bin/pip install pynvim` |
 | `node` | [nvm](https://github.com/nvm-sh/nvm) and Node 22 | copilot.lua (needs 22+), and Mason's npm-based servers (ts_ls, pyright, eslint) | nvm's installer, then `nvm install 22` |
