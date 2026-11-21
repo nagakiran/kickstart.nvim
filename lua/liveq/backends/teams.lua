@@ -1622,18 +1622,8 @@ local OVERLAY = os.getenv 'LIVEQ_IMAGE_FILE'
 OVERLAY = OVERLAY ~= '' and OVERLAY or nil
 local FONT_RATIO = os.getenv 'LIVEQ_FONT_RATIO'
 
-local function image_format()
-  local forced = os.getenv 'LIVEQ_TEAMS_IMAGE_FORMAT'
-  if forced and forced ~= '' then
-    return forced
-  end
-  local kitty = os.getenv 'KITTY_WINDOW_ID' or os.getenv 'GHOSTTY_RESOURCES_DIR' or (os.getenv 'TERM' or ''):match 'kitty'
-  -- Neovim's terminal (fzf-lua) drops the kitty protocol, though the variables say kitty
-  if kitty and not os.getenv 'NVIM' and vim.fn.executable 'kitten' == 1 then
-    return 'kitty'
-  end
-  return vim.fn.executable 'chafa' == 1 and 'symbols' or nil
-end
+local Img = dofile(vim.fs.dirname(SCRIPT) .. '/images.lua') -- drawing, copying and opening, shared with notmuch.lua
+local image_format = Img.format
 
 --- Downloads the images not cached yet (in parallel); sets `file` on each one there.
 local function fetch_images(images)
@@ -1661,32 +1651,6 @@ local function fetch_images(images)
   end
 end
 
---- The lines of kitten's unicode-placeholder output as fzf can show them: the image's transmission ahead of the first
---- line, the colour that carries the image's id on every line, no cursor moves.
-local function kitty_lines(output)
-  local transmit, rest = output:match '^\r?(.*\27\\)(.*)$'
-  if not transmit then
-    return nil
-  end
-  local colour = rest:match '\27%[38[:;][%d:;]*m'
-  if not colour then
-    return nil
-  end
-  colour = colour:gsub(':', ';')
-  rest = rest:gsub('\27%[38[:;][%d:;]*m', ''):gsub('\27%[39m', ''):gsub('\27[78]', ''):gsub('\27%[%d*;?%d*H', '')
-  local lines = {}
-  for line in vim.gsplit(rest, '\n', { plain = true }) do
-    line = line:gsub('\r', ''):gsub('\27%[%d*C', '')
-    if line ~= '' then
-      table.insert(lines, colour .. line .. '\27[39m')
-    end
-  end
-  if #lines > 0 then
-    lines[1] = transmit .. lines[1]
-  end
-  return lines
-end
-
 --- Draws `images` (from messages' `images`) `width` columns wide at most; sets `lines` on each one drawn.
 local function draw_images(images, width, format)
   format = format or (OVERLAY and vim.fn.executable 'chafa' == 1 and 'symbols') or image_format()
@@ -1705,47 +1669,15 @@ local function draw_images(images, width, format)
       elseif img.w and img.w > 0 then
         cols = math.max(8, math.min(width, math.ceil(img.w / 8)))
       end
-      local cmd = format == 'kitty'
-          and {
-            'kitten',
-            'icat',
-            '--stdin=no',
-            '--unicode-placeholder',
-            -- a stream, not shared memory, so fzf can send it again when the preview scrolls back to it
-            '--transfer-mode=stream',
-            '--background=white', -- behind transparent pixels
-            -- kitten's own conversion (0.46) turns some white areas of screenshots black; ImageMagick's does not
-            vim.fn.executable 'magick' == 1 and '--engine=magick' or '--engine=auto',
-            ('--place=%dx%d@0x0'):format(cols, rows),
-            img.file,
-          }
-        or {
-          'chafa',
-          '-f',
-          format,
-          '-s',
-          ('%dx%d'):format(cols, rows),
-          '--animate=off',
-          '--polite=on',
-          '--font-ratio=' .. (FONT_RATIO or '1/2'),
-          img.file,
-        }
-      local ok, job = pcall(vim.system, cmd, { text = true })
-      if ok then
+      local job = Img.start(img.file, cols, rows, format, FONT_RATIO)
+      if job then
         table.insert(jobs, { img = img, job = job })
       end
     end
   end
   for _, j in ipairs(jobs) do
-    local result = j.job:wait(10000)
-    local output = result.code == 0 and result.stdout or ''
-    local lines
-    if format == 'kitty' then
-      lines = kitty_lines(output)
-    elseif output ~= '' then
-      lines = vim.split(output:gsub('\n$', ''), '\n', { plain = true })
-    end
-    if lines and #lines > 0 then
+    local lines = Img.finish(j.job, format)
+    if lines then
       -- the box the art fills, which the real image is drawn into (chafa's art is a character per cell)
       j.img.rows = #lines
       j.img.cols = vim.fn.strdisplaywidth((lines[1]:gsub('\27%[[%d;]*m', '')))
@@ -1761,38 +1693,7 @@ local function draw_images(images, width, format)
   end
 end
 
---- The file as PNG for the clipboard, converted (sips on macOS, else ImageMagick) when it is not one.
-local function as_png(file)
-  local f = io.open(file, 'rb')
-  local head = f and f:read(8)
-  if f then
-    f:close()
-  end
-  if head == '\137PNG\r\n\26\n' then
-    return file
-  end
-  local png = file .. '.png'
-  if vim.uv.fs_stat(png) then
-    return png
-  end
-  local cmd = vim.fn.has 'mac' == 1 and { 'sips', '-s', 'format', 'png', file, '--out', png } or { 'magick', file, 'png:' .. png }
-  local ok, job = pcall(vim.system, cmd, { text = true })
-  return ok and job:wait(20000).code == 0 and png or nil
-end
-
---- The cached image as a .png file, for what goes by the extension (a viewer, kitty's open actions): a hard link to
---- it when it is a PNG, else a conversion.
-local function link_file(file)
-  local png = file .. '.png'
-  if vim.uv.fs_stat(png) then
-    return png
-  end
-  local converted = as_png(file)
-  if converted == file then
-    return vim.uv.fs_link(file, png) and png or nil
-  end
-  return converted
-end
+local as_png, link_file = Img.as_png, Img.link_file
 
 --- The text of message `m` with each [image] that has a drawing replaced by it (on lines of their own); for the
 --- picker's real images, below a caption `[image K/N]` that tells it where image K is. One that is not drawn but has a
@@ -2618,39 +2519,18 @@ local function image(opts, rest)
     return
   end
   if opts.copy then
-    local png = as_png(file)
-    if not png then
-      fail 'could not convert the image to PNG'
-    end
-    local cmd
-    if vim.fn.has 'mac' == 1 then
-      cmd = { 'osascript', '-e', ('set the clipboard to (read (POSIX file "%s") as «class PNGf»)'):format(png) }
-    elseif os.getenv 'WAYLAND_DISPLAY' and vim.fn.executable 'wl-copy' == 1 then
-      cmd = { 'sh', '-c', 'wl-copy --type image/png < "$1"', 'sh', png }
-    elseif os.getenv 'DISPLAY' and vim.fn.executable 'xclip' == 1 then
-      cmd = { 'xclip', '-selection', 'clipboard', '-t', 'image/png', '-i', png }
-    else
-      fail 'no clipboard for images here (macOS, or wl-copy / xclip with a display)'
-    end
-    local result = vim.system(cmd, { text = true }):wait(10000)
-    if result.code ~= 0 then
-      fail('copying failed: ' .. vim.trim(result.stderr or ''))
+    local ok, why = Img.copy(file)
+    if not ok then
+      fail(why)
     end
     io.stderr:write 'Image copied to the clipboard\n'
     return
   end
   if opts.open then
-    -- the viewer goes by the file's extension, which the cache's files have not
-    local shown = link_file(file) or file
-    local cmd = vim.fn.has 'mac' == 1 and { 'open', shown } or { 'xdg-open', shown }
-    vim.system(cmd, { detach = true })
+    Img.open(file)
     return
   end
-  local width = tonumber(os.getenv 'FZF_PREVIEW_COLUMNS') or tonumber(os.getenv 'LIVEQ_WIDTH') or 80
-  draw_images({ img }, math.max(8, width - 1))
-  for _, line in ipairs(img.lines or { '(no image viewer: kitten or chafa)' }) do
-    out((line:gsub(IMAGE_LINE, '')))
-  end
+  out(table.concat(Img.draw_big(file), '\n'))
 end
 
 local commands = {

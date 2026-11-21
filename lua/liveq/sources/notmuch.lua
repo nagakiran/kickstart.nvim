@@ -71,6 +71,7 @@ return function(opts)
 
     -- alt-h in the picker hides the quoted history of each reply in the preview (`show --fold`)
     preview_toggles = { ['alt-h'] = { flag = '--fold', desc = 'fold quotes' } },
+    gallery = true, -- alt-g: the thread's images, inline and attached, one at a time (`images`/`image`, gallery.lua)
 
     actions = {
       -- like neomutt's <F7> (viewhtmlmsg): the thread rendered as a local HTML page, inline images included
@@ -86,6 +87,35 @@ return function(opts)
         end,
       },
       ['alt-o'] = web,
+      -- reply with Claude Code's mail-reply skill (~/rcfiles/.claude/skills/mail-reply): the points to make, then an
+      -- interactive `claude` in a tmux window, in the main codebase ($LIVEQ_MAIL_REPLY_DIR, default
+      -- ~/stormbreaker/security_director); it drafts and, on approval, saves the reply as an Outlook draft
+      ['alt-r'] = {
+        desc = 'Claude reply',
+        fn = function(items)
+          local item = items[1]
+          if not item then
+            return
+          end
+          if not vim.env.TMUX or vim.fn.executable 'claude' ~= 1 then
+            vim.notify('Needs tmux and the `claude` command (Claude Code)', vim.log.levels.WARN)
+            return
+          end
+          vim.ui.input({ prompt = 'What to say (empty: suggest a reply): ' }, function(points)
+            if points == nil then
+              return
+            end
+            local what = item.id:match '^id:' and ('the mail with Message-ID <%s>'):format(item.id:sub(4)) or ('the newest mail of %s'):format(item.id)
+            local prompt = ('/mail-reply Reply to %s ("%s").'):format(what, item.title or '')
+            if vim.trim(points) ~= '' then
+              prompt = prompt .. '\n\nWhat I want to say:\n' .. points
+            end
+            local dir = vim.env.LIVEQ_MAIL_REPLY_DIR or vim.fs.joinpath(vim.env.HOME, 'stormbreaker', 'security_director')
+            dir = vim.uv.fs_stat(dir) and dir or vim.fn.getcwd()
+            vim.system { 'tmux', 'new-window', '-n', 'mail-reply', '-c', dir, 'claude', prompt }
+          end)
+        end,
+      },
       ['ctrl-x'] = {
         desc = 'tag',
         fn = function(items, source)

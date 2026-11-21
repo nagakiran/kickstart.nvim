@@ -9,6 +9,8 @@
 --   nvim -l notmuch.lua saved -f tsv                         notmuch's named queries (query.NAME in its config)
 --   nvim -l notmuch.lua save [--label NAME] -- QUERY         adds a named query; usable as `query:NAME` anywhere
 --   nvim -l notmuch.lua tag -- '+a -b' thread:ID...          changes the tags of threads
+--   nvim -l notmuch.lua images -f fzf -- thread:ID           the images of a thread (inline and attached), newest first
+--   nvim -l notmuch.lua image [--copy|--open] -- MSGID#PART  one of them as large as the preview, copied, or opened
 --
 -- Items are threads (`thread:ID`), or messages (`id:MESSAGE-ID`) in the threaded view of `search --tree`. The mailbox is the one notmuch is configured for, so a source picks it with $NOTMUCH_CONFIG.
 -- See ../README.md for the contract.
@@ -84,7 +86,7 @@ local function parse(args)
     if a == '--' then
       vim.list_extend(rest, vim.list_slice(args, i + 1))
       break
-    elseif a == '--plain' or a == '--fold' or a == '--tree' then
+    elseif a == '--plain' or a == '--fold' or a == '--tree' or a == '--copy' or a == '--open' then
       opts[a:sub(3)] = true
       i = i + 1
     elseif a:match '^%-' and args[i + 1] then
@@ -587,7 +589,12 @@ local function message_text(message)
     elseif ctype == 'text/plain' and type(part.content) == 'string' then
       table.insert(texts, part.content)
     elseif ctype == 'text/html' and type(part.content) == 'string' then
-      table.insert(html_parts, part.content)
+      -- inline images (`cid:`), which w3m shows as [cid]: [image], or [image: ALT]; alt-g shows them (`images`)
+      table.insert(html_parts, (part.content:gsub('<[Ii][Mm][Gg]%s[^>]-[Ss][Rr][Cc]%s*=%s*["\']?[Cc][Ii][Dd]:[^>]*>', function(tag)
+        local alt = tag:match '[Aa][Ll][Tt]%s*=%s*"([^"]*)"' or ''
+        alt = vim.trim(alt)
+        return (alt ~= '' and not alt:lower():match '^cid' and not alt:lower():match '^image%d*$') and ('[image: ' .. alt .. ']') or '[image]'
+      end)))
     elseif type(part.content) == 'table' then
       for _, child in ipairs(part.content) do
         walk(child)
@@ -694,8 +701,9 @@ local function thread_messages(thread)
       table.insert(messages, node)
       return
     end
-    for _, child in ipairs(node) do
-      collect(child)
+    -- with --entire-thread=false the messages that do not match are null: holes, which ipairs would stop at
+    for i = 1, table.maxn(node) do
+      collect(node[i])
     end
   end
   collect(thread)
@@ -1214,7 +1222,107 @@ local function tag(_, rest)
   end
 end
 
-local commands = { search = search, show = show, terms = terms, html = html, complete = complete, url = url, saved = saved, save = save, tag = tag }
+-- -- images ---------------------------------------------------------------------------------------------------------
+
+local Img = dofile(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)) .. '/images.lua') -- shared with teams.lua
+-- not liveq/mail/: the shell's `lq` keeps the mail source's query history in a file of that name
+local IMAGE_CACHE = (os.getenv 'XDG_CACHE_HOME' or (os.getenv 'HOME' .. '/.cache')) .. '/liveq/mail-images'
+
+--- `images -f fzf -- ITEM`: a row per image of the thread (of the message, for `id:`), inline (`cid:`) or attached,
+--- newest message first: `MSGID#PART \t date sender: name — subject \t\t title`. Nothing is extracted until
+--- `image` shows one.
+local function images_of(_, rest)
+  local id = rest[1]
+  if not is_item(id) then
+    return
+  end
+  -- a thread's images, or a message's (`id:`, as neomutt's gi and the threaded view's rows give)
+  local whole = is_thread(id) and 'true' or 'false'
+  local thread, err = json { 'show', '--format=json', '--entire-thread=' .. whole, '--body=true', item_query(id) }
+  if not thread then
+    fail(err)
+  end
+  local n = 0
+  for _, m in ipairs(thread_messages(thread)) do
+    local found = {}
+    local function walk(part)
+      if type(part) ~= 'table' then
+        return
+      end
+      local ctype = (part['content-type'] or ''):lower()
+      if ctype:match '^image/' then
+        table.insert(found, part)
+      elseif type(part.content) == 'table' then
+        for _, child in ipairs(part.content) do
+          walk(child)
+        end
+      end
+    end
+    for _, part in ipairs(m.body or {}) do
+      walk(part)
+    end
+    local headers = m.headers or {}
+    for i, part in ipairs(found) do
+      n = n + 1
+      local name = part.filename or ('inline ' .. (part['content-type'] or 'image'))
+      local display = ('\27[2m%s\27[0m  \27[36m%s\27[0m  %s%s  \27[2m%s\27[0m'):format(
+        os.date('%Y-%m-%d %H:%M', m.timestamp or 0),
+        truncate(sender_name(headers.From or ''), 24),
+        #found > 1 and ('\27[33m%d/%d\27[0m '):format(i, #found) or '',
+        name,
+        truncate(headers.Subject or '', 60)
+      )
+      out(table.concat({ m.id .. '#' .. part.id, display, '', (headers.Subject or '') .. ' — ' .. name }, '\t'))
+    end
+  end
+  if n == 0 then
+    out(('\t\27[2mNo images in this %s\27[0m\t\t'):format(is_thread(id) and 'thread' or 'message'))
+  end
+end
+
+--- `image [--copy | --open] -- MSGID#PART`: an image of `images`, extracted from the mail into the cache once, then
+--- drawn as large as fzf's preview, or put on the clipboard as PNG, or opened in the image viewer.
+local function image(opts, rest)
+  local msgid, part = (rest[1] or ''):match '^(.+)#(%d+)$'
+  if not msgid then
+    return -- e.g. a hint line
+  end
+  vim.fn.mkdir(IMAGE_CACHE, 'p')
+  local file = IMAGE_CACHE .. '/' .. vim.fn.sha256(rest[1]):sub(1, 32)
+  if not vim.uv.fs_stat(file) then
+    local tmp = file .. '.' .. vim.uv.os_getpid() .. '.part'
+    if not save_part(msgid, part, tmp) then
+      os.remove(tmp)
+      fail('could not extract part ' .. part .. ' of ' .. msgid)
+    end
+    os.rename(tmp, file)
+  end
+  if opts.copy then
+    local ok, why = Img.copy(file)
+    if not ok then
+      fail(why)
+    end
+    io.stderr:write 'Image copied to the clipboard\n'
+  elseif opts.open then
+    Img.open(file)
+  else
+    out(table.concat(Img.draw_big(file), '\n'))
+  end
+end
+
+local commands = {
+  search = search,
+  show = show,
+  terms = terms,
+  html = html,
+  complete = complete,
+  url = url,
+  saved = saved,
+  save = save,
+  tag = tag,
+  images = images_of,
+  image = image,
+}
 local command = _G.arg[1]
 if not commands[command] then
   fail('unknown command: ' .. tostring(command) .. ' (expected: ' .. table.concat(vim.tbl_keys(commands), ', ') .. ')', 2)

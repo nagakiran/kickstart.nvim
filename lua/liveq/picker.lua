@@ -132,6 +132,17 @@ function M.search(source, query)
     -- neither the results nor the backend have links (e.g. a mailbox without a web client)
     actions['ctrl-o'] = nil
   end
+  -- a source whose backend lists an item's images (`images -f fzf`, `image`): their gallery (gallery.lua)
+  if source.gallery then
+    actions['alt-g'] = {
+      desc = 'gallery',
+      fn = function(items)
+        if items[1] then
+          require('liveq.gallery').open(source, items[1].id)
+        end
+      end,
+    }
+  end
   for key, action in pairs(source.actions or {}) do
     actions[key] = action
   end
