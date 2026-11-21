@@ -41,7 +41,19 @@ end
 
 function M.search(name, query)
   local spec = get(name)
-  if spec then
+  if spec and spec.tmux == 'default' and require('liveq.tmux').available(spec) then
+    require('liveq.tmux').search(spec, query) -- the shell's picker in a tmux window (tmux.lua)
+  elseif spec then
+    require('liveq.picker').search(spec, query)
+  end
+end
+
+--- The shell's picker in a tmux window (sources with `tmux`, tmux.lua), images on; liveq's picker outside tmux.
+function M.window(name, query)
+  local spec = get(name)
+  if spec and require('liveq.tmux').available(spec) then
+    require('liveq.tmux').search(spec, query, { images = true })
+  elseif spec then
     require('liveq.picker').search(spec, query)
   end
 end
@@ -132,6 +144,7 @@ function M.register(name, spec)
   end
   map(keymaps.search, M.search, spec.title .. ': search')
   map(keymaps.saved, M.saved, spec.title .. ': saved queries')
+  map(keymaps.tmux, M.window, spec.title .. ': search in a tmux window')
   map(keymaps.resume, M.resume, spec.title .. ': resume the last search')
   map(keymaps.query, M.query, spec.title .. ': query buffer')
   map(keymaps.show, M.show, spec.title .. ': show item under cursor')

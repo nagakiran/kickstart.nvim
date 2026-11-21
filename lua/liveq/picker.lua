@@ -146,6 +146,13 @@ function M.search(source, query)
   fzf_actions['alt-e'] = function(_, opts)
     require('liveq.buffer').open(source, last_query(opts))
   end
+  -- a source with `tmux` moves the search to the shell's picker in a tmux window (tmux.lua), images on: alt-w
+  local in_window = require('liveq.tmux').available(source)
+  if in_window then
+    fzf_actions['alt-w'] = function(_, opts)
+      require('liveq.tmux').search(source, last_query(opts), { images = true })
+    end
+  end
   if source.saved then
     fzf_actions['ctrl-r'] = function(_, opts)
       M.saved(source, { back = last_query(opts) })
@@ -318,6 +325,9 @@ function M.search(source, query)
   -- a source with `header_row` prints a line of column headings first (`search --header`), which fzf keeps on top
   local header_flag = source.header_row and ' --header' or ''
   vim.list_extend(header, { 'alt-e edit' })
+  if in_window then
+    table.insert(header, 'alt-w window')
+  end
   if source.saved then
     vim.list_extend(header, { '^r saved', '^s save' })
   end

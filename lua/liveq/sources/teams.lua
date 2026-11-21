@@ -195,6 +195,9 @@ return function(opts)
     -- real image over it by image.nvim where it can draw (liveq/images.lua)
     preview_toggles = { ['alt-i'] = { flag = '--images', desc = 'images' } },
     images = true,
+    -- in tmux, alt-w (and the `tmux` keymap) move the search to the shell's `lq teams` in a tmux window, where images
+    -- are real (tmux.lua); `enter` there opens the chat here. 'default': the search keymap/command open it too
+    tmux = opts.tmux,
 
     id_pattern = '^%d+:%S+$',
 

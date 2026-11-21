@@ -312,8 +312,9 @@ require('liveq').setup {
       keymaps = { search = '<leader>lk' },
     },
     teams = require 'liveq.sources.teams' {
+      tmux = true, -- in tmux, alt-w in the picker / <leader>tw: the shell's `lq teams` in a tmux window, for real images ('default': <leader>ts too)
       commands = { search = 'TeamsChats', query = 'TeamsQuery', resume = 'TeamsResume' },
-      keymaps = { search = '<leader>ts', resume = '<leader>tr' },
+      keymaps = { search = '<leader>ts', resume = '<leader>tr', tmux = '<leader>tw' },
     },
     -- copilot-api's request log (only where the proxy has run and sqlite3 is installed)
     copilot = vim.fn.executable 'sqlite3' == 1 and vim.uv.fs_stat(
