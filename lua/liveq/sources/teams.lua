@@ -305,6 +305,36 @@ local function draft(source, id, title, buf)
   end, { LIVEQ_WIDTH = '100' })
 end
 
+-- <localleader>iC: the reply goes to Claude Code's teams-reply skill (~/rcfiles/.claude/skills/teams-reply), for one
+-- that needs research (Jira, MRs, the code): an interactive `claude` in a tmux window of its own, in the main codebase
+-- ($LIVEQ_TEAMS_REPLY_DIR, default ~/stormbreaker/security_director, else Neovim's directory), given the chat and the
+-- points of the split. The skill sends only what is approved there; the split stays as it was.
+local REPLY_DIR = vim.env.LIVEQ_TEAMS_REPLY_DIR or vim.fs.joinpath(vim.env.HOME, 'stormbreaker', 'security_director')
+
+local function claude_session(id, title, buf)
+  if not vim.env.TMUX or vim.fn.executable 'claude' ~= 1 then
+    vim.notify('Needs tmux and the `claude` command (Claude Code)', vim.log.levels.WARN, { title = 'Teams' })
+    return
+  end
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  for _, sec in ipairs(sections(lines)) do
+    if sec.title:match '^your points' then
+      lines = vim.list_slice(lines, sec.first, sec.last)
+    end
+  end
+  local points = vim.trim(table.concat(lines, '\n'))
+  local prompt = ('/teams-reply Reply in the Teams chat "%s" (chat id %s).%s'):format(
+    title,
+    id,
+    points ~= '' and ('\n\nWhat I want to say:\n' .. points) or ' Read it and suggest what I should reply.'
+  )
+  local dir = vim.uv.fs_stat(REPLY_DIR) and REPLY_DIR or vim.fn.getcwd()
+  local result = vim.system({ 'tmux', 'new-window', '-n', 'reply', '-c', dir, 'claude', prompt }, { text = true }):wait(5000)
+  if result.code ~= 0 then
+    vim.notify('Could not open a tmux window: ' .. vim.trim(result.stderr or ''), vim.log.levels.ERROR, { title = 'Teams' })
+  end
+end
+
 --- A compose split for replying to chat `id`; `:w` sends the whole buffer as one message (with drafts, the draft the
 --- cursor is in). Images go in as lines
 --- `![name](path)`, sent inline, other files as `[name](path)`, attached (uploaded to OneDrive and shared with the
@@ -322,10 +352,13 @@ function M.reply(source, id, title)
   pcall(vim.api.nvim_buf_set_name, buf, 'teams-reply://' .. title .. ' [' .. buf .. ']')
   vim.wo.winbar = '%#Title# Reply to '
     .. title:gsub('%%', '%%%%')
-    .. '%*  %#Comment#:w sends (asks first) · :q! drops · <localleader>id draft with Claude · <localleader>ip paste image · <localleader>ia attach file%*'
+    .. '%*  %#Comment#:w sends (asks first) · :q! drops · <localleader>id draft with Claude · <localleader>iC Claude Code · <localleader>ip paste image · <localleader>ia attach file%*'
   vim.keymap.set('n', '<localleader>id', function()
     draft(source, id, title, buf)
   end, { buffer = buf, desc = 'Teams: draft the reply with Claude' })
+  vim.keymap.set('n', '<localleader>iC', function()
+    claude_session(id, title, buf)
+  end, { buffer = buf, desc = 'Teams: reply with Claude Code (teams-reply skill, research)' })
   vim.keymap.set('n', '<localleader>ip', function()
     local path, why = clipboard_image()
     if not path then
