@@ -134,11 +134,15 @@ local function clipboard_file()
   return vim.uv.fs_stat(path) and path or nil
 end
 
---- Puts `![name](path)` on a line of its own below the cursor (on the cursor's line when it is empty).
+local INLINE = { png = true, jpg = true, jpeg = true, gif = true } -- sent in the message; other files are attached
+
+--- Puts `![name](path)` (an image, sent inline) or `[name](path)` (any other file, attached through OneDrive) on a
+--- line of its own below the cursor (on the cursor's line when it is empty).
 local function insert_image(buf, path)
   local win = vim.fn.bufwinid(buf)
   local row = win ~= -1 and vim.api.nvim_win_get_cursor(win)[1] or vim.api.nvim_buf_line_count(buf)
-  local line = ('![%s](%s)'):format(vim.fs.basename(path), path)
+  local ext = (path:match '%.(%w+)$' or ''):lower()
+  local line = ('%s[%s](%s)'):format(INLINE[ext] and '!' or '', vim.fs.basename(path), path)
   if vim.trim(vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or '') == '' then
     vim.api.nvim_buf_set_lines(buf, row - 1, row, false, { line })
   else
@@ -151,7 +155,8 @@ local function insert_image(buf, path)
 end
 
 --- A compose split for replying to chat `id`; `:w` sends the whole buffer as one message. Images go in as lines
---- `![name](path)`, sent inline: <localleader>ip pastes the clipboard's, <localleader>ia attaches a file (the prompt
+--- `![name](path)`, sent inline, other files as `[name](path)`, attached (uploaded to OneDrive and shared with the
+--- chat, as Teams does): <localleader>ip pastes the clipboard's image, <localleader>ia attaches a file (the prompt
 --- starts with the clipboard's file; at a prompt, ctrl-r + pastes the clipboard, since ctrl-v inserts a key literally).
 function M.reply(source, id, title)
   vim.cmd 'botright 8new'
@@ -165,7 +170,7 @@ function M.reply(source, id, title)
   pcall(vim.api.nvim_buf_set_name, buf, 'teams-reply://' .. title .. ' [' .. buf .. ']')
   vim.wo.winbar = '%#Title# Reply to '
     .. title:gsub('%%', '%%%%')
-    .. '%*  %#Comment#:w sends (asks first) · :q! drops · <localleader>ip paste image · <localleader>ia attach image%*'
+    .. '%*  %#Comment#:w sends (asks first) · :q! drops · <localleader>ip paste image · <localleader>ia attach file%*'
   vim.keymap.set('n', '<localleader>ip', function()
     local path, why = clipboard_image()
     if not path then
@@ -176,7 +181,7 @@ function M.reply(source, id, title)
   end, { buffer = buf, desc = 'Teams: paste the clipboard image' })
   vim.keymap.set('n', '<localleader>ia', function()
     -- starts with the file on the clipboard, if any (copied in Finder, or its path as text)
-    vim.ui.input({ prompt = 'Image to attach: ', completion = 'file', default = clipboard_file() }, function(input)
+    vim.ui.input({ prompt = 'File to attach: ', completion = 'file', default = clipboard_file() }, function(input)
       if not input or vim.trim(input) == '' then
         return
       end
@@ -187,7 +192,7 @@ function M.reply(source, id, title)
       end
       insert_image(buf, path)
     end)
-  end, { buffer = buf, desc = 'Teams: attach an image file' })
+  end, { buffer = buf, desc = 'Teams: attach a file' })
   vim.api.nvim_create_autocmd('BufWriteCmd', {
     buffer = buf,
     callback = function()
@@ -199,11 +204,27 @@ function M.reply(source, id, title)
       end
       local first = vim.split(text, '\n', { plain = true })
       local shown = table.concat(vim.list_slice(first, 1, 3), '\n') .. (#first > 3 and '\n…' or '')
-      local images = #vim.tbl_filter(function(l)
-        return l:match '^%s*!%[[^%]]*%]%(.-%)%s*$' ~= nil
-      end, first)
+      local images, files = 0, 0
+      for _, l in ipairs(first) do
+        local bang, path = l:match '^%s*(!?)%[[^%]]*%]%(([/~][^)]*)%)%s*$'
+        if path then
+          local ext = (path:match '%.(%w+)$' or ''):lower()
+          if bang == '!' and INLINE[ext] then
+            images = images + 1
+          else
+            files = files + 1
+          end
+        end
+      end
+      local with = {}
       if images > 0 then
-        shown = shown .. ('\n\n(with %d image%s)'):format(images, images == 1 and '' or 's')
+        table.insert(with, ('%d image%s'):format(images, images == 1 and '' or 's'))
+      end
+      if files > 0 then
+        table.insert(with, ('%d file%s, uploaded to your OneDrive and shared with the chat'):format(files, files == 1 and '' or 's'))
+      end
+      if #with > 0 then
+        shown = shown .. '\n\n(with ' .. table.concat(with, ' and ') .. ')'
       end
       if vim.fn.confirm(('Send to %s?\n\n%s'):format(title, shown), '&Send\n&Cancel', 2) ~= 1 then
         return

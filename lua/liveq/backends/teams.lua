@@ -10,7 +10,8 @@
 --   nvim -l teams.lua refresh                              fetch the chat list (and new members) into the cache
 --   nvim -l teams.lua refresh --deep [N]                   ...then backfill every chat's history to N messages (300)
 --   nvim -l teams.lua send [--file PATH] -- CHAT_ID [TEXT] post a message (TEXT, or the file's contents); a line
---                                                          `![...](PATH)` sends that image inline
+--                                                          `![...](PATH)` sends that image inline, `[...](PATH)`
+--                                                          attaches that file (OneDrive, shared with the chat)
 --   nvim -l teams.lua read -- CHAT_ID                      mark the chat read, as opening it in Teams does
 --   nvim -l teams.lua show --match QUERY -- CHAT_ID         the preview, with the query's words highlighted (with
 --                                                          --plain, not highlighted: for liveq's buffer and float);
@@ -2269,7 +2270,7 @@ local function outgoing_image(path)
     end
   end
   if not mime then
-    return nil, path .. ' is not a PNG, JPEG or GIF image (other files would need OneDrive: Files.ReadWrite)'
+    return nil, path .. ' is not a PNG, JPEG or GIF image'
   end
   local w, h
   if mime == 'image/png' and #bytes >= 24 then
@@ -2282,9 +2283,47 @@ local function outgoing_image(path)
   return { bytes = bytes, mime = mime, w = w, h = h }
 end
 
+local ATTACH_FOLDER = 'Microsoft Teams Chat Files' -- where Teams itself puts the files sent in chats
+local UPLOAD_LIMIT = 250 * 1024 * 1024 -- Graph's simple upload
+
+--- Uploads a file to the user's OneDrive (ATTACH_FOLDER, renamed when the name is taken) and lets `emails` read it,
+--- as Teams does for a file sent in a chat (Files.ReadWrite). Returns the driveItem, or nil and an error.
+local function upload_attachment(path, emails)
+  if not token() then
+    return nil, 'no Graph token'
+  end
+  local name = vim.fs.basename(path)
+  local encoded = (ATTACH_FOLDER .. '/' .. name):gsub('[^%w/._~-]', function(c)
+    return ('%%%02X'):format(c:byte())
+  end)
+  local url = GRAPH .. '/me/drive/root:/' .. encoded .. ':/content?@microsoft.graph.conflictBehavior=rename'
+  local cmd = { 'curl', '-sS', '--max-time', '600', '-X', 'PUT', '-H', '@' .. HEADER_FILE, '-H', 'Content-Type: application/octet-stream' }
+  vim.list_extend(cmd, { '--data-binary', '@' .. path, '-w', '\n%{http_code}', url })
+  local result = vim.system(cmd, { text = true }):wait(610000)
+  local body, status = (result.stdout or ''):match '^(.*)\n(%d+)$'
+  local ok, item = pcall(vim.json.decode, body or '', { luanil = { object = true, array = true } })
+  if result.code ~= 0 or not ok or type(item) ~= 'table' or not item.id then
+    local e = ok and type(item) == 'table' and item.error or {}
+    return nil, ('uploading %s: HTTP %s %s %s'):format(name, status or '?', e.code or '', e.message or vim.trim(result.stderr or ''))
+  end
+  if #emails > 0 then
+    local recipients = vim.tbl_map(function(e)
+      return { email = e }
+    end, emails)
+    local _, err =
+      api('POST', '/me/drive/items/' .. item.id .. '/invite', { recipients = recipients, requireSignIn = true, sendInvitation = false, roles = { 'read' } })
+    if err then
+      return nil, ('sharing %s with the chat: %s'):format(name, err)
+    end
+  end
+  return item
+end
+
 --- Posts a message to a chat. Multi-line text keeps its lines (as <br>); it is never sent empty. A line that is just
 --- an image in Markdown, `![...](PATH)`, sends that image inline in the message (Graph's hosted contents, which
---- Chat.ReadWrite allows), where the line is.
+--- Chat.ReadWrite allows), where the line is. A line that is just a link to a local file, `[...](PATH)` (or an image
+--- line whose file is not a PNG, JPEG or GIF), attaches that file as Teams does: uploaded to OneDrive, readable by the
+--- chat's members, a card in the message (Files.ReadWrite).
 local function send(opts, rest)
   local id = rest[1]
   if not id or not id:match '^%d+:' then
@@ -2308,10 +2347,52 @@ local function send(opts, rest)
   if text == '' then
     fail 'send: the message is empty'
   end
-  local parts, hosted = {}, {}
-  for _, line in ipairs(vim.split(text, '\r?\n')) do
-    local path = line:match '^%s*!%[[^%]]*%]%((.-)%)%s*$'
+  -- the files to attach, checked before anything is uploaded
+  local lines, files = vim.split(text, '\r?\n'), {}
+  for i, line in ipairs(lines) do
+    local bang, path = line:match '^%s*(!?)%[[^%]]*%]%(([/~][^)]*)%)%s*$'
     if path then
+      path = vim.fn.expand(path)
+      local stat = vim.uv.fs_stat(path)
+      if not stat or stat.type ~= 'file' then
+        fail('send: no such file: ' .. path)
+      end
+      if not (bang == '!' and outgoing_image(path)) then
+        if stat.size > UPLOAD_LIMIT then
+          fail(('send: %s is over 250 MB'):format(path))
+        end
+        files[i] = path
+      end
+    end
+  end
+  local attachments = {}
+  if next(files) then
+    local chat, data = find(id)
+    local emails = {}
+    for _, m in ipairs(chat and chat.members or {}) do
+      if m.u ~= (data and data.me) and m.e and m.e ~= '' then
+        table.insert(emails, m.e)
+      end
+    end
+    for i, path in pairs(files) do
+      local item, err = upload_attachment(path, emails)
+      if not item then
+        fail('send: ' .. err)
+      end
+      local guid = (item.eTag or ''):match '{([%x-]+)}'
+      if not guid then
+        fail('send: no id for the uploaded ' .. vim.fs.basename(path))
+      end
+      files[i] = guid
+      table.insert(attachments, { id = guid, contentType = 'reference', contentUrl = item.webUrl, name = item.name })
+    end
+  end
+  local parts, hosted = {}, {}
+  for i, line in ipairs(lines) do
+    local path = not files[i] and line:match '^%s*!%[[^%]]*%]%((.-)%)%s*$'
+    if files[i] then
+      table.insert(parts, ('<attachment id="%s"></attachment>'):format(files[i]))
+    elseif path then
       local img, why = outgoing_image(path)
       if not img then
         fail('send: ' .. why)
@@ -2332,6 +2413,9 @@ local function send(opts, rest)
   local message = { body = { contentType = 'html', content = table.concat(parts, '<br>') } }
   if #hosted > 0 then
     message.hostedContents = hosted
+  end
+  if #attachments > 0 then
+    message.attachments = attachments
   end
   local reply, err = api('POST', '/chats/' .. id .. '/messages', message)
   if not reply then
