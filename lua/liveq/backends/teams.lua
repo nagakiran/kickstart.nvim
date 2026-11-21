@@ -3,6 +3,8 @@
 --   nvim -l teams.lua search -f fzf -l LIMIT -- QUERY      chats from the on-disk cache, newest activity first
 --   nvim -l teams.lua show [--plain] [--chronological] [--count N] [--fresh] -- CHAT_ID   (--fresh skips the cache)
 --   nvim -l teams.lua show --images -- CHAT_ID             ...with the images pasted into messages drawn (see images)
+--   nvim -l teams.lua images -f fzf -- CHAT_ID             the chat's images, a row each (`URL#WxH`), newest first
+--   nvim -l teams.lua image [--copy|--open] -- URL#WxH     one of them as large as the preview, or copied, or opened
 --   nvim -l teams.lua complete -f json [-c CURSOR] -- QUERY
 --   nvim -l teams.lua url -- CHAT_ID                       the chat in the Teams web client
 --   nvim -l teams.lua refresh                              fetch the chat list (and new members) into the cache
@@ -143,7 +145,7 @@ local function parse(args)
     if a == '--' then
       vim.list_extend(rest, vim.list_slice(args, i + 1))
       break
-    elseif a == '--plain' or a == '--chronological' or a == '--fresh' or a == '--quiet' or a == '--images' then
+    elseif a == '--plain' or a == '--chronological' or a == '--fresh' or a == '--quiet' or a == '--images' or a == '--copy' or a == '--open' then
       opts[a:sub(3)] = true
       i = i + 1
     elseif a:match '^%-' and args[i + 1] then
@@ -1352,11 +1354,16 @@ local function highlight(line, words, resume)
     end
     return segment
   end
-  for s, e in
-    function()
-      return line:find('\27%[[%d;]*m', pos)
+  -- colours and links (OSC 8, whose URL a word must not be marked in) are left as they are
+  local function next_escape()
+    local s1, e1 = line:find('\27%[[%d;]*m', pos)
+    local s2, e2 = line:find('\27%]8;[^\27]*\27\\', pos)
+    if s2 and (not s1 or s2 < s1) then
+      return s2, e2
     end
-  do
+    return s1, e1
+  end
+  for s, e in next_escape do
     table.insert(parts, mark(line:sub(pos, s - 1)))
     table.insert(parts, line:sub(s, e))
     pos = e + 1
@@ -1691,8 +1698,8 @@ local function draw_images(images, width, format)
       -- block art about as wide as Teams shows it (a cell is some 8 pixels wide), within the preview; a real image
       -- (kitty's, or the picker's over the art) as large as the preview allows, so its text can be read
       local cols, rows = width, IMAGE_ROWS
-      if OVERLAY or format == 'kitty' then
-        rows = math.max(IMAGE_ROWS, (tonumber(os.getenv 'FZF_PREVIEW_LINES') or 30) - 2)
+      if OVERLAY or format == 'kitty' or img.big then
+        rows = math.max(IMAGE_ROWS, (tonumber(os.getenv 'FZF_PREVIEW_LINES') or 30) - (img.big and 3 or 2))
       elseif img.w and img.w > 0 then
         cols = math.max(8, math.min(width, math.ceil(img.w / 8)))
       end
@@ -1752,15 +1759,52 @@ local function draw_images(images, width, format)
   end
 end
 
+--- The file as PNG for the clipboard, converted (sips on macOS, else ImageMagick) when it is not one.
+local function as_png(file)
+  local f = io.open(file, 'rb')
+  local head = f and f:read(8)
+  if f then
+    f:close()
+  end
+  if head == '\137PNG\r\n\26\n' then
+    return file
+  end
+  local png = file .. '.png'
+  if vim.uv.fs_stat(png) then
+    return png
+  end
+  local cmd = vim.fn.has 'mac' == 1 and { 'sips', '-s', 'format', 'png', file, '--out', png } or { 'magick', file, 'png:' .. png }
+  local ok, job = pcall(vim.system, cmd, { text = true })
+  return ok and job:wait(20000).code == 0 and png or nil
+end
+
+--- The cached image as a .png file, for what goes by the extension (a viewer, kitty's open actions): a hard link to
+--- it when it is a PNG, else a conversion.
+local function link_file(file)
+  local png = file .. '.png'
+  if vim.uv.fs_stat(png) then
+    return png
+  end
+  local converted = as_png(file)
+  if converted == file then
+    return vim.uv.fs_link(file, png) and png or nil
+  end
+  return converted
+end
+
 --- The text of message `m` with each [image] that has a drawing replaced by it (on lines of their own); for the
---- picker's real images, below a caption `[image K/N]` that tells it where image K is.
+--- picker's real images, below a caption `[image K/N]` that tells it where image K is. One that is not drawn but has a
+--- file is a link to it (OSC 8), which a click opens in kitty (with ctrl+shift while fzf has the mouse).
 local function with_images(text, m, total)
   local i = 0
   return (
     text
-      :gsub('%[image%]', function()
+      :gsub('%[image%]', function(word)
         i = i + 1
         local img = m.images and m.images[i]
+        if img and not img.lines and img.link then
+          return '\27]8;;' .. img.link .. '\27\\\27[4m' .. word .. '\27[24m\27]8;;\27\\'
+        end
         if img and img.lines then
           local caption = OVERLAY and img.n and (IMAGE_LINE .. ('\27[2m[image %d/%d]\27[0m'):format(img.n, total) .. '\n') or ''
           return '\n' .. caption .. table.concat(img.lines, '\n') .. '\n'
@@ -1769,6 +1813,18 @@ local function with_images(text, m, total)
       :gsub('^\n+', '')
       :gsub('\n+$', '')
   )
+end
+
+--- Whether the newest of `list` were cached before images were kept (their pasted images then read "image"): fetching
+--- them again (merged into the cache) gives them their images.
+local function lacks_images(list)
+  for i = 1, math.min(#list, 50) do
+    local m = list[i]
+    if m.type == 'message' and not m.images and (m.text or ''):lower():find('image', 1, true) then
+      return true
+    end
+  end
+  return false
 end
 
 local function show(opts, rest)
@@ -1797,17 +1853,9 @@ local function show(opts, rest)
     list = vim.list_slice(list, 1, tonumber(opts.count) or (searching and 100000) or 300)
   else
     list, err = messages(chat, chat.id == CALL_LOG and math.min(want, 50) or want, opts.fresh, searching)
-    -- messages cached before images were kept: fetch the newest again (they are merged into the cache), once
-    local images = opts.images and not plain and list
-    if images and not opts.fresh then
-      for i = 1, math.min(#images, 50) do
-        local m = images[i]
-        if m.type == 'message' and not m.images and (m.text or ''):lower():find('image', 1, true) then
-          messages(chat, 50, true)
-          list, err = messages(chat, chat.id == CALL_LOG and math.min(want, 50) or want, false, searching)
-          break
-        end
-      end
+    if opts.images and not plain and not opts.fresh and list and lacks_images(list) then
+      messages(chat, 50, true)
+      list, err = messages(chat, chat.id == CALL_LOG and math.min(want, 50) or want, false, searching)
     end
   end
   if not list then
@@ -1862,8 +1910,10 @@ local function show(opts, rest)
     end
   end
   local draw = opts.images and not plain
+  -- the preview's [image] are links to the cached files (downloaded now, the newest IMAGE_MAX), unless drawn
+  local links = not plain and os.getenv 'LIVEQ_TEAMS_IMAGE_LINKS' ~= '0'
   local drawn = 0 -- images with a caption, for the picker's real ones
-  if draw then
+  if draw or links then
     local images = {}
     for _, m in ipairs(list) do
       for _, img in ipairs(m.type == 'message' and not m.deleted and m.images or {}) do
@@ -1873,8 +1923,21 @@ local function show(opts, rest)
       end
     end
     local width = tonumber(os.getenv 'FZF_PREVIEW_COLUMNS') or tonumber(os.getenv 'LIVEQ_WIDTH') or 80
-    draw_images(images, math.max(8, width - 1))
-    if OVERLAY then
+    if draw then
+      draw_images(images, math.max(8, width - 1))
+    else
+      fetch_images(images)
+    end
+    local host = vim.uv.os_gethostname() or ''
+    for _, img in ipairs(images) do
+      local file = img.file and not img.lines and link_file(img.file)
+      if file then
+        img.link = 'file://' .. host .. file:gsub('[^%w/._~-]', function(c)
+          return ('%%%02X'):format(c:byte())
+        end)
+      end
+    end
+    if draw and OVERLAY then
       -- written before any output, so that the picker never pairs a caption with the previous preview's file
       local rows, n = {}, 0
       for _, img in ipairs(images) do
@@ -2089,7 +2152,7 @@ local function show(opts, rest)
       if m.subject and m.subject ~= '' then
         table.insert(lines, plain and ('**' .. m.subject .. '**') or ('\27[1m' .. m.subject .. '\27[0m'))
       end
-      table.insert(lines, render_quotes(draw and with_images(m.text, m, drawn) or m.text, plain))
+      table.insert(lines, render_quotes((draw or links) and with_images(m.text, m, drawn) or m.text, plain))
       table.insert(lines, '')
     end
     -- the message counts for `on:` and `from:` (the preview jumps to those of the day, or of the sender)
@@ -2350,7 +2413,117 @@ local function calls()
   io.stderr:write(('%d calls in %s\n'):format(vim.tbl_count(data.calls), LOCAL_CALLS))
 end
 
-local commands = { search = search, show = show, terms = terms, complete = complete, url = url, refresh = refresh, send = send, read = read, calls = calls }
+-- -- the images of a chat ----------------------------------------------------------------------------------------
+
+--- `images -f fzf -- CHAT_ID`: a row per image pasted into the chat's messages, newest first, from the message cache
+--- (all of it, as `refresh --deep` filled it): `url \t date sender: start of the message \t\t`. Nothing is downloaded
+--- until `image` shows one.
+local function images_of(_, rest)
+  local chat, data = find(rest[1] or '')
+  if not chat then
+    return
+  end
+  local list = messages(chat, 100000, false, true) or {}
+  if lacks_images(list) then
+    messages(chat, 50, true)
+    list = messages(chat, 100000, false, true) or {}
+  end
+  local n = 0
+  for _, m in ipairs(list) do
+    if m.type == 'message' and not m.deleted then
+      for i, img in ipairs(m.images or {}) do
+        n = n + 1
+        local who = m.fromId == data.me and 'you' or (m.from or '?')
+        local text = one_line((m.text or ''):gsub('%[image%]', ''))
+        local display = ('\27[2m%s\27[0m  \27[36m%s\27[0m  %s%s'):format(
+          short_time(m.at),
+          who,
+          #m.images > 1 and ('\27[33m%d/%d\27[0m '):format(i, #m.images) or '',
+          text ~= '' and text:sub(1, 120) or '\27[2m(image only)\27[0m'
+        )
+        out(table.concat({ img.url .. '#' .. (img.w or '') .. 'x' .. (img.h or ''), display, '', long_time(m.at) .. ' ' .. who }, '\t'))
+      end
+    end
+  end
+  if n == 0 then
+    out '\t\27[2mNo images in this chat (in the cached messages: `refresh --deep` fetches older ones)\27[0m\t\t'
+  end
+end
+
+--- The cached file of the image of a row of `images` (`URL#WxH`), downloading it first; nil and an error message.
+local function image_file(key)
+  local url, w, h = (key or ''):match '^(https://[^#]+)#(%d*%.?%d*)x(%d*%.?%d*)$'
+  if not url then
+    return nil, nil, 'not an image of a chat: ' .. tostring(key)
+  end
+  local img = { url = url, w = tonumber(w), h = tonumber(h), big = true }
+  fetch_images { img }
+  if not img.file then
+    return nil, nil, 'could not download the image (no Graph token?)'
+  end
+  return img.file, img
+end
+
+--- `image [--copy | --open] -- URL#WxH`: the image of a row of `images`, as large as the preview (fzf's), or copied to
+--- the clipboard (macOS, or Wayland/X11 with wl-copy/xclip), or opened in the system's image viewer.
+local function image(opts, rest)
+  local file, img, err = image_file(rest[1])
+  if not file then
+    if opts.copy or opts.open then
+      fail(err)
+    end
+    out(err)
+    return
+  end
+  if opts.copy then
+    local png = as_png(file)
+    if not png then
+      fail 'could not convert the image to PNG'
+    end
+    local cmd
+    if vim.fn.has 'mac' == 1 then
+      cmd = { 'osascript', '-e', ('set the clipboard to (read (POSIX file "%s") as «class PNGf»)'):format(png) }
+    elseif os.getenv 'WAYLAND_DISPLAY' and vim.fn.executable 'wl-copy' == 1 then
+      cmd = { 'sh', '-c', 'wl-copy --type image/png < "$1"', 'sh', png }
+    elseif os.getenv 'DISPLAY' and vim.fn.executable 'xclip' == 1 then
+      cmd = { 'xclip', '-selection', 'clipboard', '-t', 'image/png', '-i', png }
+    else
+      fail 'no clipboard for images here (macOS, or wl-copy / xclip with a display)'
+    end
+    local result = vim.system(cmd, { text = true }):wait(10000)
+    if result.code ~= 0 then
+      fail('copying failed: ' .. vim.trim(result.stderr or ''))
+    end
+    io.stderr:write 'Image copied to the clipboard\n'
+    return
+  end
+  if opts.open then
+    -- the viewer goes by the file's extension, which the cache's files have not
+    local shown = link_file(file) or file
+    local cmd = vim.fn.has 'mac' == 1 and { 'open', shown } or { 'xdg-open', shown }
+    vim.system(cmd, { detach = true })
+    return
+  end
+  local width = tonumber(os.getenv 'FZF_PREVIEW_COLUMNS') or tonumber(os.getenv 'LIVEQ_WIDTH') or 80
+  draw_images({ img }, math.max(8, width - 1))
+  for _, line in ipairs(img.lines or { '(no image viewer: kitten or chafa)' }) do
+    out((line:gsub(IMAGE_LINE, '')))
+  end
+end
+
+local commands = {
+  images = images_of,
+  image = image,
+  search = search,
+  show = show,
+  terms = terms,
+  complete = complete,
+  url = url,
+  refresh = refresh,
+  send = send,
+  read = read,
+  calls = calls,
+}
 local command = _G.arg[1]
 if not commands[command] then
   fail('unknown command: ' .. tostring(command) .. ' (expected: ' .. table.concat(vim.tbl_keys(commands), ', ') .. ')', 2)

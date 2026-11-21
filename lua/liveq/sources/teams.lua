@@ -126,6 +126,39 @@ function M.reply(source, id, title)
   vim.cmd 'startinsert'
 end
 
+--- The gallery of chat `id`'s images (the backend's `images`/`image`): one at a time in the preview, `enter` copies it
+--- to the clipboard, ctrl-o opens it in the image viewer. In Neovim's terminal the preview is block art; alt-w then
+--- alt-g in a tmux window shows the real images.
+function M.gallery(source, id)
+  local ok, fzf = pcall(require, 'fzf-lua')
+  if not ok then
+    return
+  end
+  local backend = util.shell_cmd(source)
+  local key = function(selected)
+    return selected[1] and vim.split(selected[1], '\t', { plain = true })[1]
+  end
+  local run = function(flag)
+    return function(selected)
+      local k = key(selected)
+      if k and k ~= '' then
+        run_async(source, { 'image', flag, '--', k }, function()
+          if flag == '--copy' then
+            vim.notify('Image copied to the clipboard', vim.log.levels.INFO, { title = 'Teams' })
+          end
+        end)
+      end
+    end
+  end
+  fzf.fzf_exec(backend .. ' images -f fzf -- ' .. vim.fn.shellescape(id), {
+    prompt = 'images> ',
+    winopts = { title = ' Images ', preview = { layout = 'vertical', vertical = 'down:75%' } },
+    preview = backend .. ' image -- {1}',
+    fzf_opts = { ['--ansi'] = true, ['--delimiter'] = '\t', ['--with-nth'] = '2', ['--no-sort'] = true, ['--header'] = 'enter copy · ^o open' },
+    actions = { ['enter'] = run '--copy', ['ctrl-o'] = run '--open' },
+  })
+end
+
 --- Opens chat `id` in the current window, reusing its buffer when it is already open.
 function M.open_chat(source, id, title)
   local buf = chat_buffer(id)
@@ -216,6 +249,14 @@ return function(opts)
         fn = function(items, source)
           if items[1] then
             M.open_chat(source, items[1].id, items[1].title)
+          end
+        end,
+      },
+      ['alt-g'] = {
+        desc = 'gallery',
+        fn = function(items, source)
+          if items[1] then
+            M.gallery(source, items[1].id)
           end
         end,
       },

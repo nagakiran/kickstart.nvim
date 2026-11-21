@@ -256,6 +256,8 @@ end
 --- current match of MATCH (the lines up to the blank ones before and after it) is the one meant: its link opens at
 --- once when it has just one, as does the only link of a preview without a match. Otherwise all the links of the
 --- preview are listed on the terminal, the message's first and then by distance from it, and the picked ones open.
+local IMAGE_EXT = { png = true, jpg = true, jpeg = true, gif = true, webp = true, bmp = true }
+
 local function links(preview, match)
   local f = preview and io.open(preview, 'r')
   if not f then
@@ -288,7 +290,13 @@ local function links(preview, match)
 
   local found, seen = {}, {}
   for n, line in ipairs(lines) do
-    for _, u in ipairs(util.urls(line)) do
+    local urls = util.urls(line)
+    -- local files linked by the preview (Teams' [image]s, cached): Neovim's terminal drops the links themselves when
+    -- fzf resets colours after them, so this is how they open from liveq's picker
+    for target in line:gmatch 'file://[^%s]+' do
+      table.insert(urls, { url = target })
+    end
+    for _, u in ipairs(urls) do
       if not seen[u.url] then
         seen[u.url] = true
         local distance = (n >= first and n <= last) and 0 or math.min(math.abs(n - first), math.abs(n - last))
@@ -330,9 +338,27 @@ local function links(preview, match)
     end, vim.split(vim.trim(picked.stdout or ''), '\n', { trimempty = true }))
   end
   for _, url in ipairs(urls) do
-    local obj = vim.ui.open(url)
-    if obj then
-      obj:wait(5000)
+    local path = url:match '^file://[^/]*(/.*)$'
+    path = path and path:gsub('%%(%x%x)', function(h)
+      return string.char(tonumber(h, 16))
+    end)
+    local ext = path and (path:match '%.(%w+)$' or ''):lower()
+    if path and IMAGE_EXT[ext] and os.getenv 'TMUX' and vim.fn.executable 'kitten' == 1 then
+      -- the image in a tmux window of its own, as kitty draws it (a tmux pane is a real terminal, unlike Neovim's;
+      -- not a popup: tmux passes no kitty graphics out of one); any key closes it, and tmux goes back to the window
+      -- it came from. Not kitten's --hold, which waits for keys that never reach it through tmux. ImageMagick
+      -- converts it when there is one: kitten's own conversion blackens some white
+      local engine = vim.fn.executable 'magick' == 1 and '--engine=magick' or '--engine=auto'
+      local show = ("kitten icat %s -- %s; printf '\\033[2m(any key closes)\\033[0m'; stty -icanon -echo; dd bs=1 count=1 >/dev/null 2>&1"):format(
+        engine,
+        vim.fn.shellescape(path)
+      )
+      vim.system({ 'tmux', 'new-window', '-n', 'image', show }):wait()
+    else
+      local obj = vim.ui.open(path or url)
+      if obj then
+        obj:wait(5000)
+      end
     end
   end
 end
