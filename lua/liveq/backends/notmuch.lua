@@ -306,7 +306,11 @@ end
 ---
 --- `plain`: the lines are printed as they are (liveq's buffer and float highlight with the search register), but the
 --- matches are still written, so that they start at the same match as the preview.
-local function print_highlighted(lines, query, id, range, plain)
+---
+--- `starts`: the first lines of every message the query found (newest first). When the query has no words to
+--- highlight (from:, to:, tag:, date: …), these are the matches instead, each at the top of the preview, so that
+--- alt-n/alt-p hop between e.g. every reply from:mani in the thread.
+local function print_highlighted(lines, query, id, range, plain, starts)
   local patterns = term_patterns(query)
   local text = vim.split(table.concat(lines, '\n'), '\n', { plain = true })
   local matches, found_in = {}, {}
@@ -337,7 +341,12 @@ local function print_highlighted(lines, query, id, range, plain)
     end
   end
   local first = matches[1] and 1 or 0
-  if range then
+  if #matches == 0 and starts and #starts > 1 then
+    for _, n in ipairs(starts) do
+      table.insert(matches, n .. 't')
+    end
+    first = 1
+  elseif range then
     first = 1
     while matches[first] and matches[first] < range[1] do
       first = first + 1
@@ -959,7 +968,7 @@ local function show(opts, rest)
     show({ fold = opts.fold, plain = opts.plain, match = opts.match, images = opts.images }, rest)
     local lines = collected
     collected = nil
-    print_highlighted(lines, opts.match or '', id, target.start and { target.start, target.finish or math.huge }, opts.plain)
+    print_highlighted(lines, opts.match or '', id, target.start and { target.start, target.finish or math.huge }, opts.plain, target.starts)
     return
   end
   -- a thread shown with the picker's query: notmuch marks the messages that match it (`match`), so that the preview
@@ -1031,8 +1040,12 @@ local function show(opts, rest)
     if collected and target and target.start and not target.finish then
       target.finish = printed()
     end
-    if collected and target and m.match and (narrowed or not is_thread(id)) and not target.start then
-      target.start = printed() + 1
+    if collected and target and m.match and (narrowed or not is_thread(id)) then
+      local at = printed() + 1
+      target.start = target.start or at
+      -- every message the query found, so alt-n/alt-p can walk them when it has no words to highlight (from:, tag:)
+      target.starts = target.starts or {}
+      table.insert(target.starts, at)
     end
     if not plain and #messages > 1 then
       local label = (' %d/%d '):format(m.liveq_index, #messages)
