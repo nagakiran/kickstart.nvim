@@ -39,11 +39,13 @@ local MAX_CANDIDATES = 200
 local collected -- when set, out() keeps the lines here instead of printing them (show --match highlights them first)
 local target -- with collected: the lines { start, finish } of the message of an `id:` item, found by show()
 
+local IMAGE_LINE = '\6' -- starts each line of a drawn image (`show --images`): never highlighted, dropped on output
+
 local function out(text)
   if collected then
     table.insert(collected, text)
   else
-    io.stdout:write(text, '\n')
+    io.stdout:write((text:gsub(IMAGE_LINE, '')), '\n')
   end
 end
 
@@ -86,7 +88,7 @@ local function parse(args)
     if a == '--' then
       vim.list_extend(rest, vim.list_slice(args, i + 1))
       break
-    elseif a == '--plain' or a == '--fold' or a == '--tree' or a == '--copy' or a == '--open' then
+    elseif a == '--plain' or a == '--fold' or a == '--tree' or a == '--copy' or a == '--open' or a == '--images' then
       opts[a:sub(3)] = true
       i = i + 1
     elseif a:match '^%-' and args[i + 1] then
@@ -311,7 +313,9 @@ local function print_highlighted(lines, query, id, range, plain)
   local count = {} -- lines per pattern
   for n, line in ipairs(text) do
     local found
-    if #patterns > 0 then
+    if line:sub(1, 1) == IMAGE_LINE then
+      line = line:sub(2) -- a drawn image: its escapes and data are not text to highlight
+    elseif #patterns > 0 then
       local marked
       marked, found = highlight(line, patterns)
       line = plain and line or marked
@@ -502,6 +506,10 @@ end
 
 local ENTITIES = { nbsp = ' ', amp = '&', lt = '<', gt = '>', quot = '"', apos = "'", ['#39'] = "'" }
 
+local Img = dofile(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)) .. '/images.lua') -- shared with teams.lua
+-- not liveq/mail/: the shell's `lq` keeps the mail source's query history in a file of that name
+local IMAGE_CACHE = (os.getenv 'XDG_CACHE_HOME' or (os.getenv 'HOME' .. '/.cache')) .. '/liveq/mail-images'
+
 local W3M = vim.fn.executable 'w3m' == 1
 
 --- The width to lay text out in: fzf's preview window, else a fixed one (the float is at most 110 wide).
@@ -577,13 +585,19 @@ end
 --- The text of a message (as a function that returns it, see html_to_text) and its attachments. With w3m, the HTML
 --- alternative rendered (it keeps the layout that the plain one of e.g. Outlook loses, which double-spaces every
 --- line); without it, the text/plain parts when there are any, else the HTML ones stripped of markup.
+--- Third: the message's images for `show --images`, `{ inline = CIDS, parts = PARTS }`: the content-id of each
+--- [image] placeholder in the order of the text, and every image part (inline or attached).
 local function message_text(message)
   local texts, htmls, html_parts, attachments = {}, {}, {}, {}
+  local pictures = { inline = {}, parts = {} }
   local function walk(part)
     if type(part) ~= 'table' then
       return
     end
     local ctype = (part['content-type'] or ''):lower()
+    if ctype:match '^image/' and part.id then
+      table.insert(pictures.parts, part)
+    end
     if part.filename then
       table.insert(attachments, ('%s (%s)'):format(part.filename, ctype))
     elseif ctype == 'text/plain' and type(part.content) == 'string' then
@@ -591,6 +605,8 @@ local function message_text(message)
     elseif ctype == 'text/html' and type(part.content) == 'string' then
       -- inline images (`cid:`), which w3m shows as [cid]: [image], or [image: ALT]; alt-g shows them (`images`)
       table.insert(html_parts, (part.content:gsub('<[Ii][Mm][Gg]%s[^>]-[Ss][Rr][Cc]%s*=%s*["\']?[Cc][Ii][Dd]:[^>]*>', function(tag)
+        local cid = tag:match '[Ss][Rr][Cc]%s*=%s*["\']?[Cc][Ii][Dd]:([^"\'%s>]+)'
+        table.insert(pictures.inline, cid and vim.uri_decode(cid) or '')
         local alt = tag:match '[Aa][Ll][Tt]%s*=%s*"([^"]*)"' or ''
         alt = vim.trim(alt)
         return (alt ~= '' and not alt:lower():match '^cid' and not alt:lower():match '^image%d*$') and ('[image: ' .. alt .. ']') or '[image]'
@@ -616,7 +632,8 @@ local function message_text(message)
     end, htmls) or texts
     return vim.trim(table.concat(parts, '\n'))
   end,
-    attachments
+    attachments,
+    pictures
 end
 
 local QUOTE_HEADERS = { From = true, Sent = true, Date = true, To = true, Cc = true, Subject = true }
@@ -672,6 +689,10 @@ local function colorize(text, width)
   local result = {}
   local in_headers = false
   for i, line in ipairs(lines) do
+    if line:sub(1, 1) == IMAGE_LINE then
+      table.insert(result, line)
+      goto continue
+    end
     if not in_headers and quote_header(line) == 'From' and quote_start(lines, i) then
       in_headers = true
       table.insert(result, rule)
@@ -686,6 +707,7 @@ local function colorize(text, width)
       line = line:gsub('(%f[%w@]@%u[%w]*,? ?%u?[%w]*)', '\27[36m%1\27[0m')
       table.insert(result, line)
     end
+    ::continue::
   end
   return table.concat(result, '\n')
 end
@@ -722,6 +744,205 @@ local function thread_messages(thread)
   return messages
 end
 
+-- -- images in the preview (`show --images`) -------------------------------------------------------------------
+
+-- The images of each message drawn where its text says [image] (inline `cid:` ones, in the order of the HTML), and
+-- those not placed so (attached, or a placeholder w3m lost) after its text, under their name. Extracted from the store
+-- once into IMAGE_CACHE (shared with `image`, so the gallery finds them too). Drawn as backends/images.lua does for
+-- Teams: real pixels by kitten when fzf runs straight in kitty/Ghostty (the shell's `lq`, through tmux too), else
+-- chafa's block art; in Neovim's picker the block art gets the real image over it (liveq/images.lua, via
+-- $LIVEQ_IMAGE_FILE). LIVEQ_MAIL_IMAGE_MAX caps the images drawn per preview (12, newest messages first),
+-- LIVEQ_MAIL_IMAGE_ROWS the block art's height (16 lines).
+local IMAGE_MAX = tonumber(os.getenv 'LIVEQ_MAIL_IMAGE_MAX') or 12
+local IMAGE_ROWS = tonumber(os.getenv 'LIVEQ_MAIL_IMAGE_ROWS') or 16
+local OVERLAY = os.getenv 'LIVEQ_IMAGE_FILE'
+OVERLAY = OVERLAY ~= '' and OVERLAY or nil
+local FONT_RATIO = os.getenv 'LIVEQ_FONT_RATIO'
+
+--- The cache file of part `part_id` of message `msgid` (the key `image` uses: `MSGID#PART`).
+local function image_file(msgid, part_id)
+  return IMAGE_CACHE .. '/' .. vim.fn.sha256(msgid .. '#' .. part_id):sub(1, 32)
+end
+
+--- Extracts the images not cached yet, in parallel; sets `file` on each one there.
+local function extract_images(images)
+  vim.fn.mkdir(IMAGE_CACHE, 'p')
+  local jobs = {}
+  for _, img in ipairs(images) do
+    local file = image_file(img.msgid, img.part)
+    if vim.uv.fs_stat(file) then
+      img.file = file
+    else
+      local cmd = { os.getenv 'LIVEQ_NOTMUCH' or 'notmuch', 'show', '--format=raw', '--part=' .. img.part, 'id:' .. img.msgid }
+      local ok, job = pcall(vim.system, cmd)
+      if ok then
+        table.insert(jobs, { img = img, file = file, job = job })
+      end
+    end
+  end
+  for _, j in ipairs(jobs) do
+    local result = j.job:wait(30000)
+    if result.code == 0 and result.stdout and result.stdout ~= '' then
+      local tmp = j.file .. '.' .. vim.uv.os_getpid() .. '.part'
+      local f = io.open(tmp, 'wb')
+      if f then
+        f:write(result.stdout)
+        f:close()
+        os.rename(tmp, j.file)
+        j.img.file = j.file
+      end
+    end
+  end
+end
+
+--- Draws `images` at most `width` columns wide; sets `lines` (and the box, `cols` x `rows`) on each one drawn.
+local function draw_images(images, width, format)
+  format = format or (OVERLAY and vim.fn.executable 'chafa' == 1 and 'symbols') or Img.format()
+  if not format or #images == 0 then
+    return
+  end
+  local jobs = {}
+  for _, img in ipairs(images) do
+    if img.file and not img.lines then
+      -- a real image (kitty's, or the picker's over the art) as tall as the preview, so that a screenshot's text can
+      -- be read; block art shorter, as it only tells what the image is
+      local rows = IMAGE_ROWS
+      if OVERLAY or format == 'kitty' then
+        rows = math.max(IMAGE_ROWS, (tonumber(os.getenv 'FZF_PREVIEW_LINES') or 30) - 2)
+      end
+      local job = Img.start(img.file, width, rows, format, FONT_RATIO)
+      if job then
+        table.insert(jobs, { img = img, job = job })
+      end
+    end
+  end
+  for _, j in ipairs(jobs) do
+    local lines = Img.finish(j.job, format)
+    if lines then
+      j.img.rows = #lines
+      j.img.cols = vim.fn.strdisplaywidth((lines[1]:gsub('\27%[[%d;]*m', '')))
+      for i, line in ipairs(lines) do
+        lines[i] = IMAGE_LINE .. line .. '\27[0m'
+      end
+      j.img.lines = lines
+    end
+  end
+  -- kitten fails where it finds no terminal to ask the size of a cell: block art instead
+  if format == 'kitty' and #jobs > 0 and not jobs[1].img.lines and vim.fn.executable 'chafa' == 1 then
+    draw_images(images, width, 'symbols')
+  end
+end
+
+local PLACEHOLDER = '%[image[^%]\n]*%]'
+
+--- Plans and draws the images of `messages` (their `bodies`, texts resolved into `.resolved`): sets `bodies[i].slots`
+--- (the image of each placeholder, by position) and `.rest` (the others, after the text). Writes the picker's layout
+--- file first, numbering the images in the order they will be printed, so captions and file always agree.
+local function prepare_images(messages, bodies, width, fold)
+  -- the messages the preview opens at (`match`: the `id:` item's, or those the query found) get the budget first
+  local order = {}
+  for i, m in ipairs(messages) do
+    if m.match then
+      table.insert(order, i)
+    end
+  end
+  for i, m in ipairs(messages) do
+    if not m.match then
+      table.insert(order, i)
+    end
+  end
+  local all = {}
+  for _, i in ipairs(order) do
+    local m, b = messages[i], bodies[i]
+    b.slots, b.rest = {}, {}
+    local by_cid, used, referenced = {}, {}, {}
+    for _, cid in ipairs(b.pictures.inline) do
+      referenced[cid] = true
+    end
+    for _, part in ipairs(b.pictures.parts) do
+      local cid = part['content-id']
+      if cid then
+        by_cid[(cid:gsub('^<', ''):gsub('>$', ''))] = part
+      end
+    end
+    local _, placeholders = b.resolved:gsub(PLACEHOLDER, '')
+    for k = 1, placeholders do
+      local part = by_cid[b.pictures.inline[k] or '']
+      if part and not used[part] and #all < IMAGE_MAX then
+        used[part] = true
+        b.slots[k] = { msgid = m.id, part = part.id }
+        table.insert(all, b.slots[k])
+      end
+    end
+    for _, part in ipairs(b.pictures.parts) do
+      local cid = (part['content-id'] or ''):gsub('^<', ''):gsub('>$', '')
+      -- folded (alt-h): an inline image whose placeholder was in the quoted history stays hidden with it
+      if not used[part] and #all < IMAGE_MAX and not (fold and referenced[cid]) then
+        used[part] = true
+        local img = { msgid = m.id, part = part.id, name = part.filename or part['content-type'] }
+        table.insert(b.rest, img)
+        table.insert(all, img)
+      end
+    end
+  end
+  if #all == 0 then
+    return 0
+  end
+  extract_images(all)
+  draw_images(all, math.max(8, width - 1))
+  -- numbered in the order they are printed (the captions'), not the order they were planned in
+  local n, rows = 0, {}
+  local function number(img)
+    if img and img.lines then
+      n = n + 1
+      img.n = n
+      table.insert(rows, ('%d\t%d\t%d\t%s'):format(n, img.cols, img.rows, img.file))
+    end
+  end
+  for _, b in ipairs(bodies) do
+    for k = 1, table.maxn(b.slots) do
+      number(b.slots[k])
+    end
+    for _, img in ipairs(b.rest) do
+      number(img)
+    end
+  end
+  if OVERLAY then
+    local f = io.open(OVERLAY, 'w')
+    if f then
+      f:write(table.concat(rows, '\n'), '\n')
+      f:close()
+    end
+  end
+  return n
+end
+
+--- An image's lines as a block of text: for the picker's real images, below a caption `[image K/N]` that tells it
+--- where image K is.
+local function image_block(img, total, label)
+  local caption = OVERLAY and (IMAGE_LINE .. ('\27[2m[image %d/%d]\27[0m'):format(img.n, total)) or (label and (IMAGE_LINE .. '\27[2m' .. label .. '\27[0m'))
+  return (caption and (caption .. '\n') or '') .. table.concat(img.lines, '\n')
+end
+
+--- The text of a message with its images drawn: each placeholder with a drawing replaced by it, on lines of its own,
+--- and the images not placed after the text.
+local function with_images(text, b, total)
+  local k = 0
+  text = text:gsub(PLACEHOLDER, function(word)
+    k = k + 1
+    local img = b.slots[k]
+    if img and img.lines then
+      return '\n' .. image_block(img, total, word) .. '\n'
+    end
+  end)
+  for _, img in ipairs(b.rest) do
+    if img.lines then
+      text = text .. '\n\n' .. image_block(img, total, '[' .. (img.name or 'image') .. ']')
+    end
+  end
+  return (text:gsub('\n\n\n+', '\n\n'))
+end
+
 --- The thread as text, newest message first. `--plain`: Markdown for the float, without colours. `--fold`: without
 --- the quoted history of each reply (alt-h in the picker). `--match QUERY`: the words of the query highlighted, and
 --- the lines that have them written to $LIVEQ_MATCH_FILE (see print_highlighted).
@@ -735,7 +956,7 @@ local function show(opts, rest)
   local locate = opts.plain and not is_thread(id) and os.getenv 'LIVEQ_MATCH_FILE'
   if not collected and (opts.match or locate) then
     collected, target = {}, {}
-    show({ fold = opts.fold, plain = opts.plain, match = opts.match }, rest)
+    show({ fold = opts.fold, plain = opts.plain, match = opts.match, images = opts.images }, rest)
     local lines = collected
     collected = nil
     print_highlighted(lines, opts.match or '', id, target.start and { target.start, target.finish or math.huge }, opts.plain)
@@ -776,8 +997,19 @@ local function show(opts, rest)
   -- start rendering every message (w3m runs in parallel) before printing the first
   local bodies = {}
   for i, m in ipairs(messages) do
-    local text, attachments = message_text(m)
-    bodies[i] = { text = text, attachments = attachments }
+    local text, attachments, pictures = message_text(m)
+    bodies[i] = { text = text, attachments = attachments, pictures = pictures }
+  end
+  -- `--images` (alt-i): every text is needed first, to know which placeholder each image fills, before printing any
+  local drawn
+  if opts.images and not plain then
+    for _, b in ipairs(bodies) do
+      b.resolved = b.text()
+      if opts.fold then
+        b.resolved, b.folded = fold_quotes(b.resolved), true -- only the images left in sight are drawn
+      end
+    end
+    drawn = prepare_images(messages, bodies, width, opts.fold)
   end
   local subject
   for _, m in ipairs(messages) do
@@ -819,8 +1051,11 @@ local function show(opts, rest)
       out(('%sAttachment:%s %s'):format(dim, reset, a))
     end
     out ''
-    local text = bodies[i].text()
-    if opts.fold then
+    local text = bodies[i].resolved or bodies[i].text()
+    if drawn and drawn > 0 then
+      text = with_images(text, bodies[i], drawn)
+    end
+    if opts.fold and not bodies[i].folded then
       text = fold_quotes(text)
       if plain then
         text = text:gsub('\27%[[%d;]*m', '')
@@ -1223,10 +1458,6 @@ local function tag(_, rest)
 end
 
 -- -- images ---------------------------------------------------------------------------------------------------------
-
-local Img = dofile(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)) .. '/images.lua') -- shared with teams.lua
--- not liveq/mail/: the shell's `lq` keeps the mail source's query history in a file of that name
-local IMAGE_CACHE = (os.getenv 'XDG_CACHE_HOME' or (os.getenv 'HOME' .. '/.cache')) .. '/liveq/mail-images'
 
 --- `images -f fzf -- ITEM`: a row per image of the thread (of the message, for `id:`), inline (`cid:`) or attached,
 --- newest message first: `MSGID#PART \t date sender: name — subject \t\t title`. Nothing is extracted until

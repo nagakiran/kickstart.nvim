@@ -70,7 +70,13 @@ return function(opts)
     syntax = syntax,
 
     -- alt-h in the picker hides the quoted history of each reply in the preview (`show --fold`)
-    preview_toggles = { ['alt-h'] = { flag = '--fold', desc = 'fold quotes' } },
+    -- alt-i draws the mail's images in the preview, inline ones where the text says [image] (`show --images`): block
+    -- art here, with the real image over it by image.nvim where it can draw (liveq/images.lua)
+    preview_toggles = {
+      ['alt-h'] = { flag = '--fold', desc = 'fold quotes' },
+      ['alt-i'] = { flag = '--images', desc = 'images' },
+    },
+    images = true,
     gallery = true, -- alt-g: the thread's images, inline and attached, one at a time (`images`/`image`, gallery.lua)
 
     actions = {
