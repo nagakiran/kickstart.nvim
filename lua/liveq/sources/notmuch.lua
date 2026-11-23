@@ -93,9 +93,9 @@ return function(opts)
         end,
       },
       ['alt-o'] = web,
-      -- reply with Claude Code's mail-reply skill (~/rcfiles/.claude/skills/mail-reply): the points to make, then an
-      -- interactive `claude` in a tmux window, in the main codebase ($LIVEQ_MAIL_REPLY_DIR, default
-      -- ~/stormbreaker/security_director); it drafts and, on approval, saves the reply as an Outlook draft
+      -- reply with Claude Code's mail-reply skill (~/rcfiles/.claude/skills/mail-reply): an interactive `claude` in a
+      -- tmux window, in the main codebase ($LIVEQ_MAIL_REPLY_DIR, default ~/stormbreaker/security_director), which reads
+      -- the thread and asks there for the points to make; it drafts and, on approval, saves the reply as an Outlook draft
       ['alt-r'] = {
         desc = 'Claude reply',
         fn = function(items)
@@ -107,19 +107,14 @@ return function(opts)
             vim.notify('Needs tmux and the `claude` command (Claude Code)', vim.log.levels.WARN)
             return
           end
-          vim.ui.input({ prompt = 'What to say (empty: suggest a reply): ' }, function(points)
-            if points == nil then
-              return
-            end
-            local what = item.id:match '^id:' and ('the mail with Message-ID <%s>'):format(item.id:sub(4)) or ('the newest mail of %s'):format(item.id)
-            local prompt = ('/mail-reply Reply to %s ("%s").'):format(what, item.title or '')
-            if vim.trim(points) ~= '' then
-              prompt = prompt .. '\n\nWhat I want to say:\n' .. points
-            end
-            local dir = vim.env.LIVEQ_MAIL_REPLY_DIR or vim.fs.joinpath(vim.env.HOME, 'stormbreaker', 'security_director')
-            dir = vim.uv.fs_stat(dir) and dir or vim.fn.getcwd()
-            vim.system { 'tmux', 'new-window', '-n', 'mail-reply', '-c', dir, 'claude', prompt }
-          end)
+          local what = item.id:match '^id:' and ('the mail with Message-ID <%s>'):format(item.id:sub(4)) or ('the newest mail of %s'):format(item.id)
+          local prompt = ('/mail-reply Reply to %s ("%s"). I have not given the points yet: read the thread, then ask me what I want to say.'):format(
+            what,
+            item.title or ''
+          )
+          local dir = vim.env.LIVEQ_MAIL_REPLY_DIR or vim.fs.joinpath(vim.env.HOME, 'stormbreaker', 'security_director')
+          dir = vim.uv.fs_stat(dir) and dir or vim.fn.getcwd()
+          vim.system { 'tmux', 'new-window', '-n', 'mail-reply', '-c', dir, 'claude', prompt }
         end,
       },
       ['ctrl-x'] = {
