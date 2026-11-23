@@ -558,9 +558,23 @@ return function(opts)
       ['ctrl-r'] = {
         desc = 'refresh',
         fn = function(_, source)
+          -- in the background: a refresh fetches every changed chat (15s to minutes), which froze the editor when waited on
           vim.notify('Fetching chats from Teams…', vim.log.levels.INFO, { title = 'Teams' })
-          if util.run(source, { 'refresh' }, { timeout = 180000 }) then
-            reopen()
+          local cmd = vim.list_extend(util.cmd(source), { 'refresh' })
+          local ok, err = pcall(vim.system, cmd, { text = true, timeout = 180000 }, function(result)
+            vim.schedule(function()
+              if result.code ~= 0 then
+                local msg = vim.trim((result.stderr or '') .. (result.stdout or ''))
+                vim.notify(msg ~= '' and msg or ('refresh failed (exit ' .. result.code .. ')'), vim.log.levels.ERROR, { title = 'Teams' })
+                return
+              end
+              local done = vim.trim((result.stdout or '') .. (result.stderr or '')) -- "Fetched N chats" (stderr)
+              vim.notify(done ~= '' and done or 'Teams chats refreshed', vim.log.levels.INFO, { title = 'Teams' })
+              reopen()
+            end)
+          end)
+          if not ok then
+            vim.notify(tostring(err), vim.log.levels.ERROR, { title = 'Teams' })
           end
         end,
       },

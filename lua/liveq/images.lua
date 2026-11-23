@@ -75,8 +75,11 @@ function M.attach(buf, layout_file)
   local function scan()
     if not vim.api.nvim_buf_is_valid(buf) then
       clear()
-      timer:stop()
-      timer:close()
+      -- both a pending timer tick and the BufWipeout autocmd can land here: close once
+      if not timer:is_closing() then
+        timer:stop()
+        timer:close()
+      end
       return
     end
     local win = vim.fn.bufwinid(buf)
