@@ -7,6 +7,9 @@
 --   nvim -l teams.lua image [--copy|--open] -- URL#WxH     one of them as large as the preview, or copied, or opened
 --   nvim -l teams.lua complete -f json [-c CURSOR] -- QUERY
 --   nvim -l teams.lua url -- CHAT_ID                       the chat in the Teams web client
+--   nvim -l teams.lua members -f fzf -- CHAT_ID            the chat's members, a row each (`address \t name address`)
+--   nvim -l teams.lua people -f fzf -- CHAT_ID             the people of your other chats, to add to this one
+--   nvim -l teams.lua add-members [--history all|none|DAYS] -- CHAT_ID ADDRESS...   add people to a group chat
 --   nvim -l teams.lua refresh                              fetch the chat list (and new members) into the cache
 --   nvim -l teams.lua refresh --deep [N]                   ...then backfill every chat's history to N messages (300)
 --   nvim -l teams.lua send [--file PATH] -- CHAT_ID [TEXT] post a message (TEXT, or the file's contents); a line
@@ -2533,7 +2536,146 @@ local function image(opts, rest)
   out(table.concat(Img.draw_big(file), '\n'))
 end
 
+--- `members -f fzf -- CHAT_ID`: the people in a chat, a row each sorted by name and you last:
+--- `address \t name  address \t`, after a heading row with the chat's name and how many there are. They come from the
+--- cache, which a refresh fills for chats that changed; a chat cached without them is asked for them now.
+local function members_of(_, rest)
+  local chat, data = find(rest[1] or '')
+  if not chat then
+    return
+  end
+  if chat.id == SELF_CHAT or chat.id == CALL_LOG or chat.id == MEETINGS then
+    out '\t\27[2mThis is not a chat with members\27[0m\t'
+    return
+  end
+  local list = chat.members
+  if not list or #list == 0 then
+    local res, err = api('GET', '/chats/' .. chat.id .. '/members')
+    if not res then
+      out('\t\27[31mCannot fetch the members: ' .. tostring(err) .. '\27[0m\t')
+      return
+    end
+    list = trim_members(res.value)
+  end
+  local my_id = data.me
+  local rows = vim.deepcopy(list)
+  table.sort(rows, function(a, b)
+    if (a.u == my_id) ~= (b.u == my_id) then
+      return b.u == my_id
+    end
+    return (a.n or ''):lower() < (b.n or ''):lower()
+  end)
+  out(('\t\27[1m%s\27[0m  \27[2m%d member%s\27[0m\t'):format(chat_name(chat, my_id), #rows, #rows == 1 and '' or 's'))
+  local width = 0
+  for _, m in ipairs(rows) do
+    width = math.max(width, vim.fn.strdisplaywidth(m.n or ''))
+  end
+  for _, m in ipairs(rows) do
+    local name = (m.n and m.n ~= '') and m.n or '(unknown)'
+    local you = m.u == my_id and '  \27[33m(you)\27[0m' or ''
+    out(table.concat({ m.e or '', pad(name, width) .. '  \27[36m' .. (m.e or '') .. '\27[0m' .. you, '' }, '\t'))
+  end
+end
+
+--- `people -f fzf -- CHAT_ID`: everyone in the cached chats who is not in this one, to add to it: a row each, sorted by
+--- name, `address \t name  address \t`, after a heading row. Graph's directory search would need User.ReadBasic.All,
+--- which this token lacks, so the people known are those you share a chat with; anyone else is added by address.
+local function people(_, rest)
+  local chat, data = find(rest[1] or '')
+  if not chat then
+    return
+  end
+  local present, seen, rows = {}, {}, {}
+  for _, m in ipairs(chat.members or {}) do
+    present[(m.e or ''):lower()] = true
+  end
+  for _, c in ipairs(data.chats or {}) do
+    for _, m in ipairs(c.members or {}) do
+      local key = (m.e or ''):lower()
+      if key ~= '' and m.u ~= data.me and not present[key] and not seen[key] then
+        seen[key] = true
+        table.insert(rows, m)
+      end
+    end
+  end
+  table.sort(rows, function(a, b)
+    return (a.n or ''):lower() < (b.n or ''):lower()
+  end)
+  out(('\t\27[1mAdd to %s\27[0m  \27[2m%d people known from your chats; type an address for anyone else\27[0m\t'):format(chat_name(chat, data.me), #rows))
+  local width = 0
+  for _, m in ipairs(rows) do
+    width = math.max(width, vim.fn.strdisplaywidth(m.n or ''))
+  end
+  for _, m in ipairs(rows) do
+    out(table.concat({ m.e, pad(m.n or '', width) .. '  \27[36m' .. m.e .. '\27[0m', '' }, '\t'))
+  end
+end
+
+--- `add-members [--history all|none|DAYS] -- CHAT_ID ADDRESS...`: adds people to a group or meeting chat (Graph's
+--- POST /chats/{id}/members, which Chat.ReadWrite allows), sharing all of the chat's history with them (the default,
+--- as in Teams' own Add people dialog), none, or that of the last DAYS days. A person known from the cached chats is added by their user id, anyone
+--- else by the address (their sign-in name, which at HPE is the mail address). Each one added joins the cached members.
+local function add_members(opts, rest)
+  local id = table.remove(rest, 1) or ''
+  local chat, data = find(id)
+  if not chat then
+    fail('chat ' .. id .. ' is not in the cache', 2)
+  end
+  if chat.chatType ~= 'group' and chat.chatType ~= 'meeting' then
+    fail('only a group or meeting chat takes new members (this one is ' .. tostring(chat.chatType) .. ')', 2)
+  end
+  if #rest == 0 then
+    fail('no one to add', 2)
+  end
+  local history = opts.history or 'all'
+  local start
+  if history == 'all' then
+    start = '0001-01-01T00:00:00Z'
+  elseif tonumber(history) then
+    start = iso_utc(os.time() - tonumber(history) * 86400)
+  elseif history ~= 'none' then
+    fail('--history takes all, none or a number of days', 2)
+  end
+  local known = {}
+  for _, c in ipairs(data.chats or {}) do
+    for _, m in ipairs(c.members or {}) do
+      if m.e and m.u then
+        known[m.e:lower()] = m
+      end
+    end
+  end
+  local failed = 0
+  for _, addr in ipairs(rest) do
+    local m = known[addr:lower()]
+    local body = {
+      ['@odata.type'] = '#microsoft.graph.aadUserConversationMember',
+      roles = { 'owner' },
+      ['user@odata.bind'] = GRAPH .. "/users('" .. (m and m.u or addr) .. "')",
+      visibleHistoryStartDateTime = start,
+    }
+    local res, err = api('POST', '/chats/' .. chat.id .. '/members', body)
+    if res then
+      out('added ' .. (res.displayName or (m and m.n) or addr) .. ' <' .. (res.email or addr) .. '>')
+      local fresh, fdata = find(chat.id) -- re-read: a background refresh may have rewritten the cache meanwhile
+      if fresh then
+        fresh.members = fresh.members or {}
+        table.insert(fresh.members, { n = res.displayName or (m and m.n), e = res.email or addr, u = res.userId or (m and m.u) })
+        write_json(CHATS, fdata)
+      end
+    else
+      failed = failed + 1
+      io.stderr:write('cannot add ' .. addr .. ': ' .. tostring(err) .. '\n')
+    end
+  end
+  if failed > 0 then
+    os.exit(1)
+  end
+end
+
 local commands = {
+  members = members_of,
+  people = people,
+  ['add-members'] = add_members,
   images = images_of,
   image = image,
   search = search,

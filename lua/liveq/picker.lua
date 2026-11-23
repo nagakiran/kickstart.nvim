@@ -320,6 +320,28 @@ function M.search(source, query)
     }
     table.insert(header, 'alt-c columns')
   end
+  -- alt-f switches the prompt between the query, which reloads the results from the server, and a filter of the
+  -- results already listed, fuzzy over the whole row, like fzf-lua's live grep ↔ fuzzy toggle. Entering the filter keeps
+  -- the query in a file and unbinds `change` so nothing reloads; leaving it puts the query and the prompt back (the
+  -- prompt of the current view, after alt-c) and rebinds `change`, which runs the query once more (fzf fires `change`
+  -- after the whole chain, so it cannot be restored before the rebind).
+  local filter_mode, filter_query = vim.fn.tempname(), vim.fn.tempname()
+  local filter_prompt = source.view_state and (source.view_state .. '.prompt') or vim.fn.tempname()
+  if not source.view_state then
+    local f = io.open(filter_prompt, 'w')
+    if f then
+      f:write(prompt)
+      f:close()
+    end
+  end
+  local m, q, p = vim.fn.shellescape(filter_mode), vim.fn.shellescape(filter_query), vim.fn.shellescape(filter_prompt)
+  fzf_keymap['alt-f'] = table.concat({
+    ('transform:if [ -e %s ]; then rm -f %s;'):format(m, m),
+    ('echo "transform-query(cat %s)+rebind(change)+disable-search+transform-prompt(cat %s)";'):format(q, p),
+    ('else : > %s; printf %%s {q} > %s;'):format(m, q),
+    'echo "unbind(change)+clear-query+enable-search+change-prompt(filter> )"; fi',
+  }, ' ')
+  table.insert(header, 'alt-f filter')
   -- a source with `sort` lists ways to sort its results (`sort -f tsv`: label, then the query with its sort replaced);
   -- alt-s picks one on the terminal and it becomes the query, so the server sorts, and saved queries keep the order
   if source.sort then
