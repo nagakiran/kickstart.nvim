@@ -323,6 +323,11 @@ require('liveq').setup {
       commands = { search = 'CopilotUsage', query = 'CopilotUsageQuery', resume = 'CopilotUsageResume' },
       keymaps = { search = '<leader>Cs', resume = '<leader>Cr' },
     } or nil,
+    -- Jenkins builds of the sb-build chain (Juniper's server; on other networks the search just says it is offline)
+    jenkins = vim.fn.executable 'curl' == 1 and require 'liveq.sources.jenkins' {
+      commands = { search = 'JenkinsBuilds', query = 'JenkinsQuery', resume = 'JenkinsResume', show = 'JenkinsShow' },
+      keymaps = { search = '<leader>Bs', resume = '<leader>Br', show = '<leader>Bi', open = '<leader>Bo' },
+    } or nil,
   },
 }
 

@@ -12,9 +12,13 @@
 --   nvim -l teams.lua add-members [--history all|none|DAYS] -- CHAT_ID ADDRESS...   add people to a group chat
 --   nvim -l teams.lua refresh                              fetch the chat list (and new members) into the cache
 --   nvim -l teams.lua refresh --deep [N]                   ...then backfill every chat's history to N messages (300)
---   nvim -l teams.lua send [--file PATH] -- CHAT_ID [TEXT] post a message (TEXT, or the file's contents); a line
+--   nvim -l teams.lua send [--file PATH] [--dry-run] -- CHAT_ID [TEXT]   post a message (TEXT, or the file's
+--                                                          contents) written in Markdown: lists, `code`, ``` blocks,
+--                                                          > quotes, **bold**, links; `@Lastname, Firstname` (or a
+--                                                          member's unique first/last name) is a real @mention; a line
 --                                                          `![...](PATH)` sends that image inline, `[...](PATH)`
---                                                          attaches that file (OneDrive, shared with the chat)
+--                                                          attaches that file (OneDrive, shared with the chat);
+--                                                          --dry-run prints the HTML and mentions, sends nothing
 --   nvim -l teams.lua read -- CHAT_ID                      mark the chat read, as opening it in Teams does
 --   nvim -l teams.lua show --match QUERY -- CHAT_ID         the preview, with the query's words highlighted (with
 --                                                          --plain, not highlighted: for liveq's buffer and float);
@@ -150,7 +154,16 @@ local function parse(args)
     if a == '--' then
       vim.list_extend(rest, vim.list_slice(args, i + 1))
       break
-    elseif a == '--plain' or a == '--chronological' or a == '--fresh' or a == '--quiet' or a == '--images' or a == '--copy' or a == '--open' then
+    elseif
+      a == '--plain'
+      or a == '--chronological'
+      or a == '--fresh'
+      or a == '--quiet'
+      or a == '--images'
+      or a == '--copy'
+      or a == '--open'
+      or a == '--dry-run'
+    then
       opts[a:sub(3)] = true
       i = i + 1
     elseif a:match '^%-' and args[i + 1] then
@@ -2156,6 +2169,187 @@ local function html_escape(s)
   return (s:gsub('&', '&amp;'):gsub('<', '&lt;'):gsub('>', '&gt;'):gsub('"', '&quot;'))
 end
 
+-- -- Markdown -> Teams HTML (for send) -----------------------------------------------------------------------------
+
+--- The @mentions a message can make: a list of { form, name, id } for the chat's members other than me, longest form
+--- first. Each member is matched by the full display name ("Varghese, Christo"), and by the first or last name alone
+--- when no other member shares it.
+local function mention_forms(members, my_id)
+  local forms, count = {}, {}
+  local function short(m)
+    local last, first = (m.n or ''):match '^([^,]+),%s*(%S+)'
+    return { first, last }
+  end
+  for _, m in ipairs(members or {}) do
+    if m.u and m.u ~= my_id and m.n and m.n ~= '' then
+      for _, s in ipairs(short(m)) do
+        count[s:lower()] = (count[s:lower()] or 0) + 1
+      end
+    end
+  end
+  for _, m in ipairs(members or {}) do
+    if m.u and m.u ~= my_id and m.n and m.n ~= '' then
+      table.insert(forms, { form = m.n:lower(), name = m.n, id = m.u })
+      for _, s in ipairs(short(m)) do
+        if count[s:lower()] == 1 and s:lower() ~= m.n:lower() then
+          table.insert(forms, { form = s:lower(), name = m.n, id = m.u })
+        end
+      end
+    end
+  end
+  table.sort(forms, function(a, b)
+    return #a.form > #b.form
+  end)
+  return forms
+end
+
+--- Renders one line of Markdown text as Teams HTML: `code`, [text](url), bare URLs, **bold**, *italic*, and @mentions
+--- of the chat's members (`forms`), which are added to `mentions` as Graph wants them (`<at id="N">` in the body).
+local function inline_html(s, forms, mentions, unknown)
+  local keep = {}
+  local function hold(html)
+    table.insert(keep, html)
+    return '\1' .. #keep .. '\2'
+  end
+  local function text(t)
+    t = t:gsub('%[([^%]]+)%]%((https?://[^)%s]+)%)', function(label, url)
+      return hold(('<a href="%s">%s</a>'):format(html_escape(url), html_escape(label)))
+    end)
+    t = t:gsub('https?://[^%s<>\1\2]+', function(url)
+      local tail = url:match '[.,;:!?)]+$' or ''
+      url = url:sub(1, #url - #tail)
+      return hold(('<a href="%s">%s</a>'):format(html_escape(url), html_escape(url))) .. tail
+    end)
+    -- @mentions: an @ not preceded by a letter or digit (so not an address), then a member's name
+    local out, i = {}, 1
+    while true do
+      local at = t:find('@', i, true)
+      if not at then
+        table.insert(out, t:sub(i))
+        break
+      end
+      table.insert(out, t:sub(i, at - 1))
+      local found
+      if not t:sub(at - 1, at - 1):match '%w' then
+        local rest = t:sub(at + 1):lower()
+        for _, f in ipairs(forms) do
+          if rest:sub(1, #f.form) == f.form and not rest:sub(#f.form + 1, #f.form + 1):match '[%w_]' then
+            found = f
+            break
+          end
+        end
+      end
+      if found then
+        local written = t:sub(at + 1, at + #found.form)
+        local n = #mentions
+        table.insert(mentions, {
+          id = n,
+          mentionText = written,
+          mentioned = { user = { id = found.id, displayName = found.name, userIdentityType = 'aadUser' } },
+        })
+        table.insert(out, hold(('<at id="%d">%s</at>'):format(n, html_escape(written))))
+        i = at + 1 + #found.form
+      else
+        local word = not t:sub(at - 1, at - 1):match '%w' and t:sub(at + 1):match '^%u[%w.-]*'
+        if word and unknown then
+          unknown[word] = true
+        end
+        table.insert(out, '@')
+        i = at + 1
+      end
+    end
+    t = html_escape(table.concat(out))
+    t = t:gsub('%*%*(.-)%*%*', '<b>%1</b>')
+    t = t:gsub('%*([^*%s][^*]-)%*', '<i>%1</i>')
+    return t
+  end
+  local parts, pos = {}, 1
+  while true do
+    local a, b, code = s:find('`([^`]+)`', pos)
+    if not a then
+      table.insert(parts, text(s:sub(pos)))
+      break
+    end
+    table.insert(parts, text(s:sub(pos, a - 1)))
+    table.insert(parts, '<code>' .. html_escape(code) .. '</code>')
+    pos = b + 1
+  end
+  return (table.concat(parts):gsub('\1(%d+)\2', function(n)
+    return keep[tonumber(n)]
+  end))
+end
+
+--- Renders Markdown lines as Teams HTML: paragraphs (single newlines kept as <br>), `-`/`*`/`1.` lists, ``` code
+--- blocks, `>` quotes and `#` headings (bold), with inline_html for the text. `raw[i]`, when set, is the HTML for line
+--- i as it is (an image or a file attachment).
+local function markdown_html(lines, raw, forms, mentions, unknown)
+  local html, para, list = {}, {}, nil
+  local function inline(s)
+    return inline_html(s, forms, mentions, unknown)
+  end
+  local function flush()
+    if #para > 0 then
+      table.insert(html, '<p>' .. table.concat(para, '<br>') .. '</p>')
+      para = {}
+    end
+    if list then
+      table.insert(html, ('<%s>%s</%s>'):format(list.tag, table.concat(list.items), list.tag))
+      list = nil
+    end
+  end
+  local i = 1
+  while i <= #lines do
+    local line = lines[i]
+    local bullet = line:match '^%s*[-*+]%s+(.*)$'
+    local numbered = not bullet and line:match '^%s*%d+[.)]%s+(.*)$'
+    if raw[i] then
+      flush()
+      table.insert(html, raw[i])
+    elseif line:match '^%s*```' then
+      flush()
+      local code = {}
+      i = i + 1
+      while i <= #lines and not lines[i]:match '^%s*```' do
+        table.insert(code, html_escape(lines[i]))
+        i = i + 1
+      end
+      table.insert(html, '<codeblock class=""><code>' .. table.concat(code, '<br>') .. '</code></codeblock>')
+    elseif bullet or numbered then
+      local tag = bullet and 'ul' or 'ol'
+      if #para > 0 or (list and list.tag ~= tag) then
+        flush()
+      end
+      list = list or { tag = tag, items = {} }
+      table.insert(list.items, '<li>' .. inline(bullet or numbered) .. '</li>')
+    elseif list and line:match '^%s%s+%S' then
+      -- a wrapped list item: joins the item above
+      list.items[#list.items] = list.items[#list.items]:gsub('</li>$', ' ' .. inline(vim.trim(line)) .. '</li>')
+    elseif line:match '^%s*$' then
+      flush()
+    elseif line:match '^%s*>' then
+      flush()
+      local quote = {}
+      while i <= #lines and lines[i]:match '^%s*>' do
+        table.insert(quote, inline(lines[i]:gsub('^%s*>%s?', '')))
+        i = i + 1
+      end
+      i = i - 1
+      table.insert(html, '<blockquote>' .. table.concat(quote, '<br>') .. '</blockquote>')
+    elseif line:match '^#+%s' then
+      flush()
+      table.insert(html, '<p><b>' .. inline(line:gsub('^#+%s+', '')) .. '</b></p>')
+    else
+      if list then
+        flush()
+      end
+      table.insert(para, inline(line))
+    end
+    i = i + 1
+  end
+  flush()
+  return table.concat(html)
+end
+
 local IMAGE_TYPES = { ['\137PNG'] = 'image/png', ['\255\216\255'] = 'image/jpeg', ['GIF8'] = 'image/gif' }
 
 --- An image file to send: its bytes, MIME type and size (PNG's, from its header), or nil and why not.
@@ -2291,11 +2485,22 @@ local function send(opts, rest)
       table.insert(attachments, { id = guid, contentType = 'reference', contentUrl = item.webUrl, name = item.name })
     end
   end
-  local parts, hosted = {}, {}
+  -- @mentions resolve against the chat's members (fetched when the cache has none)
+  local forms = {}
+  if text:find('@', 1, true) then
+    local chat, data = find(id)
+    local members = chat and chat.members
+    if not members or #members == 0 then
+      local res = api('GET', '/chats/' .. id .. '/members')
+      members = res and trim_members(res.value) or {}
+    end
+    forms = mention_forms(members, (data and data.me) or me())
+  end
+  local raw, hosted = {}, {}
   for i, line in ipairs(lines) do
     local path = not files[i] and line:match '^%s*!%[[^%]]*%]%((.-)%)%s*$'
     if files[i] then
-      table.insert(parts, ('<attachment id="%s"></attachment>'):format(files[i]))
+      raw[i] = ('<attachment id="%s"></attachment>'):format(files[i])
     elseif path then
       local img, why = outgoing_image(path)
       if not img then
@@ -2309,12 +2514,25 @@ local function send(opts, rest)
         local w = math.min(img.w, 600)
         size = (' width="%d" height="%d"'):format(w, math.floor(img.h * w / img.w + 0.5))
       end
-      table.insert(parts, ('<img src="../hostedContents/%s/$value" alt="image"%s>'):format(n, size))
-    else
-      table.insert(parts, html_escape(line))
+      raw[i] = ('<p><img src="../hostedContents/%s/$value" alt="image"%s></p>'):format(n, size)
     end
   end
-  local message = { body = { contentType = 'html', content = table.concat(parts, '<br>') } }
+  local mentions, unknown = {}, {}
+  local content = markdown_html(lines, raw, forms, mentions, unknown)
+  for word in pairs(unknown) do
+    io.stderr:write(('send: @%s is not a member of this chat, sent as text\n'):format(word))
+  end
+  if opts['dry-run'] then
+    out(content)
+    for _, m in ipairs(mentions) do
+      out(('mention %d: %s -> %s'):format(m.id, m.mentionText, m.mentioned.user.displayName))
+    end
+    return
+  end
+  local message = { body = { contentType = 'html', content = content } }
+  if #mentions > 0 then
+    message.mentions = mentions
+  end
   if #hosted > 0 then
     message.hostedContents = hosted
   end

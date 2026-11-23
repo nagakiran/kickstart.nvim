@@ -75,9 +75,15 @@ In the shell, a source is registered in `liveq.zsh` with `lq_register NAME CMD '
 ### `jira`
 
 - `jiratui-jql` from the jiratui repo (Python; shares the TUI's auth, JQL parser and saved queries).
-- `alt-t` shows the results as a tree (`search --tree`): each work item followed by its children, i.e. the stories of an epic and the subtasks of a story, two levels down (`parent in (...)`, ten parents per query, all at once); a result that is a child of another result goes under it, and the children that the JQL does not find are dimmed. It takes a few seconds for 100 epics.
+- `alt-t` shows the results as a tree (`search --tree`):
+  - each work item followed by its children, i.e. the stories of an epic and the subtasks of a story, two levels down (`parent in (...)`, ten parents per query, all at once)
+  - a result that is a child of another result goes under it, and the children that the JQL does not find are dimmed
+  - it takes a few seconds for 100 epics.
 - A heading row names the columns, and `alt-c` cycles through sets of them (`views` in `sources/jira.lua`): default (type, status, assignee, updated), people (+ reporter), planning (type, status, assignee, Fix-ETA, Dev Complete Date, Short Status) and labels (type, status, labels, components).
-- `jiratui-jql search --columns` takes any of type, status, assignee, reporter, priority, updated, created, due, resolved, resolution, labels, components, parent, project, or the name or id of any Jira field, custom ones included (`Fix-ETA`, `Fix-ETA[Date]`, `"Story Points"`, `customfield_10109`, `cf[10109]`; looked up in the JQL field cache, rendered as the TUI renders them); the key is always first and the summary last.
+- `jiratui-jql search --columns` takes any of:
+  - type, status, assignee, reporter, priority, updated, created, due, resolved, resolution, labels, components, parent, project
+  - or the name or id of any Jira field, custom ones included (`Fix-ETA`, `Fix-ETA[Date]`, `"Story Points"`, `customfield_10109`, `cf[10109]`; looked up in the JQL field cache, rendered as the TUI renders them)
+  - the key is always first and the summary last.
 - `alt-s` sorts by any of the columns shown that Jira can order by (custom fields as `cf[N]`), either way, or back to Jira's default; the heading of the sorted column gets ↑, ↓ (or ↕ when the `ORDER BY` leaves the direction to Jira).
 
 ### `mail`, `gmail`
@@ -103,9 +109,18 @@ In the shell, a source is registered in `liveq.zsh` with `lq_register NAME CMD '
     - the preview and `alt-b` open the thread at that message, and `ctrl-x` tags just that message
   - they colour quoted reply headers, `>` quotes, inline comment markers like `[Name]`, @mentions and links.
 - `ctrl-x` changes tags; `alt-o` opens the web client where there is one (`gmail` links to Gmail through the message id; `mail` has none).
-- Inline images (`cid:`), which w3m shows as `[cid]`, read `[image]` (or `[image: ALT]`); `alt-g` opens a gallery of the thread's images, inline and attached (`images -f fzf -- thread:ID`, or `id:` for one message; `image -- MSGID#PART` extracts one from the mail into `~/.cache/liveq/mail-images` and draws it as large as the preview, `--copy` puts it on the clipboard, `--open` opens it): `enter` copies, `ctrl-o` opens; the drawing is `backends/images.lua`, shared with Teams.
+- Inline images (`cid:`), which w3m shows as `[cid]`, read `[image]` (or `[image: ALT]`).
+- `alt-g` opens a gallery of the thread's images, inline and attached:
+  - `images -f fzf -- thread:ID`, or `id:` for one message
+  - `image -- MSGID#PART` extracts one from the mail into `~/.cache/liveq/mail-images` and draws it as large as the preview, `--copy` puts it on the clipboard, `--open` opens it
+  - `enter` copies, `ctrl-o` opens
+  - the drawing is `backends/images.lua`, shared with Teams.
 - neomutt has the same gallery on `gi` (`~/rcfiles/bin/mail/mail-images.sh`) and shows an image picked in its attachment list in kitty (mailcap, `show-image.sh`).
-- `alt-r` replies with Claude Code's `mail-reply` skill (`~/rcfiles/.claude/skills/mail-reply`; neomutt: `gc`): it opens `claude` in a tmux window in `~/stormbreaker/security_director` (`$LIVEQ_MAIL_REPLY_DIR`), which reads the thread, sums up what is asked and asks there for the points to make (several lines, or "suggest"), looks up Jira, MRs and the code, drafts in my mail style and, on approval, saves the reply as an Outlook draft (`make_draft.py` into `~/.mail/hpe/Drafts`, uploaded by `hpe-push-drafts.sh`): HPE mail is sent from Outlook.
+- `alt-r` replies with Claude Code's `mail-reply` skill (`~/rcfiles/.claude/skills/mail-reply`; neomutt: `gc`): it opens `claude` in a tmux window in `~/stormbreaker/security_director` (`$LIVEQ_MAIL_REPLY_DIR`), which:
+  - reads the thread, sums up what is asked and asks there for the points to make (several lines, or "suggest")
+  - looks up Jira, MRs and the code
+  - drafts in my mail style
+  - on approval, saves the reply as an Outlook draft (`make_draft.py` into `~/.mail/hpe/Drafts`, uploaded by `hpe-push-drafts.sh`): HPE mail is sent from Outlook.
 
 ### `mr`
 
@@ -140,7 +155,12 @@ In the shell, a source is registered in `liveq.zsh` with `lq_register NAME CMD '
 - Items are chats, newest activity first, `●` unread.
 - Searches a cache of the chat list (`~/.cache/liveq/teams/chats.json`), so typing makes no HTTP call; when the cache is older than `LIVEQ_TEAMS_TTL` (120s) a detached refresh starts and the next keystroke sees it.
 - Members are fetched in `$batch` requests and kept while a chat is unchanged (the first refresh of 150 chats takes about a minute, later ones seconds; `$expand=members` inline costs seconds per meeting chat).
-- Query: words (chat name, members and message text; `-word` excludes on name, members and last message only), `with:NAME`, `from:me|NAME` (a message sent by you or by that person; with `on:`, that day, so `from:me on:2026-11-17` lists the chats you wrote in that day; `-from:me on:today` those active today without a word from you; the preview jumps to those messages), `type:1:1|group|meeting|calls`, `is:unread`, `has:call`, `since:7d`; completes member names, most frequent first.
+- Query:
+  - words (chat name, members and message text; `-word` excludes on name, members and last message only)
+  - `with:NAME`
+  - `from:me|NAME`: a message sent by you or by that person; with `on:`, that day, so `from:me on:2026-11-17` lists the chats you wrote in that day; `-from:me on:today` those active today without a word from you; the preview jumps to those messages
+  - `type:1:1|group|meeting|calls`, `is:unread`, `has:call`, `since:7d`
+  - completes member names, most frequent first.
 - Calls: a call started from a chat posts callStarted/callEnded events into it (the end with duration and people), shown in the chat as `— call · 1h 9m —`; `has:call` lists the chats with one, the row showing the newest call's duration and the count and total (`has:call on:today` for today's).
 - A call from the Calls app posts nothing to the chat: Teams logs every call in the hidden thread `48:calllogs`, listed as the chat "Calls" (`cal`, `type:calls`), which Graph strips to the call's id and end time; each entry is joined by that id to the chat event with its duration and people when there is one, else shows `?`.
 - On macOS the Teams desktop app caches the whole call log in its IndexedDB: `backends/teams_calls.py` (standard-library Python, read-only: LevelDB tables, the write-ahead log and Snappy, then the `call-log` JSON of each log message) reads it into `calls.json` in the cache, merged so calls the app forgets stay.
@@ -165,12 +185,32 @@ In the shell, a source is registered in `liveq.zsh` with `lq_register NAME CMD '
     - `action launch --type=overlay --env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin kitten icat --hold --engine=magick -- ${FILE_PATH}`
     - ImageMagick, since kitten's own conversion turns some white areas black, and Homebrew's PATH, which kitty started from the Dock lacks
   - through tmux it needs `set -as terminal-features ",*:hyperlinks"` (then a reattach).
-- In liveq's picker in Neovim the click does nothing: Neovim's terminal (0.12) drops a link that a colour reset follows, and fzf always writes one there; `alt-x` opens the image of the message at the match instead (all of the preview's links in a list when it is not clear which), in tmux in a tmux window of its own (`kitten icat`; any key closes it and tmux goes back to the picker's window; not a popup, since tmux passes no kitty graphics out of one), elsewhere in the image viewer.
-- `alt-g` opens a gallery of the chat's images (`images -f fzf -- CHAT_ID` lists them from the message cache, newest first, with date, sender and the start of the message; `image -- URL#WxH` downloads one when it is first shown and draws it as large as the preview; `image --copy` puts it on the clipboard as PNG, `image --open` opens it in the image viewer): `enter` copies, `ctrl-o` opens, `esc` goes back; in Neovim its preview is block art, in the shell's `lq teams` (and its tmux window, `alt-w`) real images.
+- In liveq's picker in Neovim the click does nothing: Neovim's terminal (0.12) drops a link that a colour reset follows, and fzf always writes one there.
+- `alt-x` opens the image of the message at the match instead (all of the preview's links in a list when it is not clear which):
+  - in tmux, in a tmux window of its own (`kitten icat`; any key closes it and tmux goes back to the picker's window; not a popup, since tmux passes no kitty graphics out of one)
+  - elsewhere, in the image viewer.
+- `alt-g` opens a gallery of the chat's images:
+  - `images -f fzf -- CHAT_ID` lists them from the message cache, newest first, with date, sender and the start of the message
+  - `image -- URL#WxH` downloads one when it is first shown and draws it as large as the preview
+  - `image --copy` puts it on the clipboard as PNG, `image --open` opens it in the image viewer
+  - `enter` copies, `ctrl-o` opens, `esc` goes back
+  - in Neovim its preview is block art, in the shell's `lq teams` (and its tmux window, `alt-w`) real images.
 - `alt-i` draws the images pasted into messages in the preview, in place of `[image]` (fetched from Graph once into `~/.cache/liveq/teams/images`; the newest 12, at most 16 lines tall: `LIVEQ_TEAMS_IMAGE_MAX`, `LIVEQ_TEAMS_IMAGE_ROWS`).
-- In Neovim fzf-lua's fzf runs in a `:terminal`, which drops graphics protocols, so the preview draws chafa's block characters, as large as the preview allows, each under a caption `[image K/N]`, and `liveq/images.lua` has image.nvim draw the real image over it (sources with `images = true`: the picker passes `$LIVEQ_IMAGE_FILE`, where `show` lists each image's box and file, and looks for the captions on fzf's screen a few times a second; an image is cropped at the bottom of the window, and one whose caption has scrolled away stays block art).
-- Without image.nvim (or a terminal it can draw in) the block art stays; fzf straight in kitty or Ghostty (the shell's `lq teams`, where `alt-i` toggles them too and `LQ_IMAGES=1` starts with them on) gets real pixels through the kitty protocol's unicode placeholders, as large as the preview allows (kitten, converting with ImageMagick when it is installed: kitten's own conversion turns some white areas black): they scroll and crop with the text, go away with it when tmux switches windows, and pass through tmux with `allow-passthrough on`. This is the better way to look at images.
-- In tmux, `alt-w` in the Neovim picker moves the search, query and all, to a tmux window of its own with images on, and `<leader>tw` opens one straight away (`tmux = true`, `tmux.lua`, or `tmux = 'default'` for `<leader>ts` too; a window, not a popup, since a popup takes every key and so tmux's prefix): the shell's `lq teams`, with `alt-i` for real images, and `enter` closing it and opening the chat in a Neovim buffer (`enter` prints `id \t title`, `LQ_ACCEPT_NTH=1,4`, to a file Neovim reads once the window's shell signals `tmux wait-for` on exit; Neovim's environment reaches that zsh through a mode-600 file it sources and deletes).
+- In Neovim fzf-lua's fzf runs in a `:terminal`, which drops graphics protocols, so:
+  - the preview draws chafa's block characters, as large as the preview allows, each under a caption `[image K/N]`
+  - and `liveq/images.lua` has image.nvim draw the real image over it (sources with `images = true`):
+    - the picker passes `$LIVEQ_IMAGE_FILE`, where `show` lists each image's box and file, and looks for the captions on fzf's screen a few times a second
+    - an image is cropped at the bottom of the window, and one whose caption has scrolled away stays block art.
+- Without image.nvim (or a terminal it can draw in) the block art stays.
+- fzf straight in kitty or Ghostty (the shell's `lq teams`, where `alt-i` toggles them too and `LQ_IMAGES=1` starts with them on) gets real pixels through the kitty protocol's unicode placeholders. This is the better way to look at images.
+  - as large as the preview allows (kitten, converting with ImageMagick when it is installed: kitten's own conversion turns some white areas black)
+  - they scroll and crop with the text, go away with it when tmux switches windows, and pass through tmux with `allow-passthrough on`.
+- In tmux, `alt-w` in the Neovim picker moves the search, query and all, to a tmux window of its own with images on, and `<leader>tw` opens one straight away:
+  - `tmux = true`, `tmux.lua`, or `tmux = 'default'` for `<leader>ts` too
+  - a window, not a popup, since a popup takes every key and so tmux's prefix
+  - it runs the shell's `lq teams`, with `alt-i` for real images, and `enter` closing it and opening the chat in a Neovim buffer
+  - `enter` prints `id \t title` (`LQ_ACCEPT_NTH=1,4`) to a file Neovim reads once the window's shell signals `tmux wait-for` on exit
+  - Neovim's environment reaches that zsh through a mode-600 file it sources and deletes.
 - Outside tmux, or without `~/rcfiles/.zsh/liveq.zsh` (`$LIVEQ_ZSH`), the fzf-lua picker as before.
 - `LIVEQ_TEAMS_IMAGE_FORMAT` forces `symbols`, `kitty`, `sixels` or `iterm`; without chafa or kitten the preview stays as it was.
 - `enter` opens a chat buffer (`teams://NAME`, oldest at the top, cursor on the newest; opening marks the chat read). Its keys:
@@ -179,7 +219,9 @@ In the shell, a source is registered in `liveq.zsh` with `lq_register NAME CMD '
       - the split then holds `── draft 1 · short ──`, `── draft 2 · fuller ──`, `── worth adding (not sent) ──` and `── your points (not sent) ──`
       - `:w` sends the draft the cursor is in, `u` brings the points back
       - attached images and files are kept out of the prompt and added to each draft as they were
-    - `<localleader>iC` hands the reply to Claude Code's `teams-reply` skill (`~/rcfiles/.claude/skills/teams-reply`, sharing that style guide) for one that needs research: an interactive `claude` in a tmux window of its own, in `~/stormbreaker/security_director` (`$LIVEQ_TEAMS_REPLY_DIR`), given the chat and the split's points; it reads the chat, looks up Jira issues, MRs (`glab`) and the code, shows drafts with their sources and sends only the text approved there
+    - `<localleader>iC` hands the reply to Claude Code's `teams-reply` skill (`~/rcfiles/.claude/skills/teams-reply`, sharing that style guide) for one that needs research:
+      - an interactive `claude` in a tmux window of its own, in `~/stormbreaker/security_director` (`$LIVEQ_TEAMS_REPLY_DIR`), given the chat and the split's points
+      - it reads the chat, looks up Jira issues, MRs (`glab`) and the code, shows drafts with their sources and sends only the text approved there
     - images go in as lines `![name](path)` and are sent inline, Graph's hosted contents:
       - `<localleader>ip` pastes the clipboard's image, saved under `~/.cache/nvim/liveq/teams/outgoing` with pngpaste or osascript on macOS, wl-paste or xclip on Linux
       - `<localleader>ia` attaches a file: a PNG, JPEG or GIF inline as `![name](path)`, any other as `[name](path)` (uploaded to `Microsoft Teams Chat Files` in your OneDrive, readable by the chat's members, a card in the message, as Teams does; this needs `Files.ReadWrite`, granted with `o365_auth.py consent --scope https://graph.microsoft.com/Files.ReadWrite ACCOUNT`)
@@ -193,13 +235,32 @@ In the shell, a source is registered in `liveq.zsh` with `lq_register NAME CMD '
 
 ### `copilot`
 
-- `backends/copilot.lua`, run with `nvim -l`, reading the request log that copilot-api (the Copilot proxy Claude Code talks to) keeps in SQLite (`~/.local/share/copilot-api/copilot-api.sqlite`, or `$COPILOT_API_SQLITE_DB_PATH`; table `token_usage_events`, one row per request with its time, model, client, session, tokens and cost) with `sqlite3 -readonly`, so the proxy need not be running; its own `/token-usage` API answers only six fixed periods, this any range (~0.1s a query).
-- A row is a group of requests: `by:day` (default), `hour`, `week`, `month`, `model`, `session`, `client` (the user agent's first word, e.g. `claude-cli/2.1.328`) or `endpoint`, with requests, input/output/cache tokens, cost and credits (copilot-api's AIU, the unit of the quota's `credits_used`); the first row is the total, and a heading row names the columns.
+- `backends/copilot.lua`, run with `nvim -l`, reading the request log that copilot-api (the Copilot proxy Claude Code talks to) keeps in SQLite, with `sqlite3 -readonly`, so the proxy need not be running:
+  - `~/.local/share/copilot-api/copilot-api.sqlite`, or `$COPILOT_API_SQLITE_DB_PATH`
+  - table `token_usage_events`, one row per request with its time, model, client, session, tokens and cost
+  - its own `/token-usage` API answers only six fixed periods, this any range (~0.1s a query).
+- A row is a group of requests:
+  - `by:day` (default), `hour`, `week`, `month`, `model`, `session`, `client` (the user agent's first word, e.g. `claude-cli/2.1.328`) or `endpoint`
+  - with requests, input/output/cache tokens, cost and credits (copilot-api's AIU, the unit of the quota's `credits_used`)
+  - the first row is the total, and a heading row names the columns.
 - Query: `since:7d|2w|1M|12h|DATE|all`, `on:today|yesterday|3d|2026-11-05|11-05|2026-11|A..B` (default: this month), `model:` `client:` `endpoint:` `session:` (a part of it; `-model:` excludes), `sort:time|cost|requests|tokens`, and words (a part of the model, client or session).
 - Completes the prefixes, and models, clients and sessions from the log (the most used, or recent, first).
 - The preview, `enter` (a buffer) and `ctrl-v` break a row down within the query's filters (they reach `show` through `--match`): by model, then by hour, session and client for a day, by day and session for a model or client, and a session's or an hour's requests one by one.
 - `alt-d` drills down: a month or week becomes its days, a day its hours, a model, client or session a filter `by:day` (`by:hour` for a session).
 - Registered only where `sqlite3` and the log exist.
 - `:CopilotUsage`, `:CopilotUsageResume`, `<leader>Cs`, `<leader>Cr`.
+
+### `jenkins`
+
+- `backends/jenkins.lua`, run with `nvim -l`, reading Jenkins' JSON API with curl (anonymous, `~/.netrc`, or `LIVEQ_JENKINS_USER`/`LIVEQ_JENKINS_TOKEN`, the token passed on stdin).
+- Items are builds, `JOB#N`, of a chain of jobs (`LIVEQ_JENKINS_JOBS`, root first; default `baas-sb-build sb-build ems-nightly fs-build sb-nightly` on `LIVEQ_JENKINS_URL`, `sspt-nm-jenkins`). A build is placed under the build that started it through its `BuildUpstreamCause`, so no console is parsed.
+- The tree is on by default (`alt-t` toggles it): each `baas-sb-build` run with its `sb-build` and that run's `ems-nightly`, `fs-build` and `sb-nightly`. With `job:`, a matching build lifts to its root's whole chain, and the builds that did not match are dimmed. The flat view has a chain column instead (`sb✔ ems✔ fs✔ nightly✘`).
+- Builds are cached in `~/.cache/liveq/jenkins/HOST/builds.json` (~4MB, 9,000 builds; a search takes ~60ms). The cache keeps builds after Jenkins rotates them out (`sb-build` keeps only ~100). A search older than `LIVEQ_JENKINS_TTL` (60s) starts a detached `refresh` of the newest 60 builds of each job and waits up to 4s for it. The first refresh fetches every build (~3s). `refresh --full` fetches every build again.
+- Query: words (a part of the branch, job or user), `branch:` (exact when it names a known branch, else a part of it), `job:sb-nightly` (also short names: `baas sb ems fs nightly`, a list `job:fs,ems`, or `job:all`; default the root job), `result:success|failure|aborted|unstable|running` (a list too), `user:`, `mode:`, `version:` (`RELEASE_VERSION`), `since:7d`, `on:today|2026-11-05|A..B`, and `-` before a prefix to exclude.
+- `per:branch` keeps the newest matching build of each branch: `job:nightly result:success per:branch` is the last green `sb-nightly` of every branch, and `job:nightly branch:X result:success` the history of one.
+- Completes branches, users, modes and versions from the cache (most recent first, with build counts).
+- The preview shows the parameters, the chain with this build marked, the stages (`wfapi/describe`, with their errors), the job's last 10 builds on the branch with its last success, and for a build that did not pass, the end of its console without `[Pipeline]` steps or Java stack frames. Details of a finished build are cached under `details/`.
+- `enter` opens the build in a buffer, `alt-d` lists the job's builds on that branch, `alt-l` opens the whole console in a buffer (`log -- JOB#N`), and `ctrl-r` refreshes from the server.
+- `:JenkinsBuilds`, `:JenkinsResume`, `:JenkinsShow`, `<leader>Bs`, `<leader>Br`, `<leader>Bi`, `<leader>Bo`. In the shell, `lq jenkins` (flat, with `ctrl-l` for the console in `less`).
 
 `sources/notmuch.lua` is a factory: `require('liveq.sources.notmuch') { title, prompt, config, url, primary, commands, keymaps }`. In the shell, `mls` is `lq mail`. `sources/gitlab.lua` is a factory too: `{ project, repo, host, commands, keymaps }`; `mrs` is `lq mr`.
