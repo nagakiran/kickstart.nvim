@@ -281,6 +281,38 @@ return {
       -- commit) + this file's diff. A single `git` invocation can't produce both the
       -- all-file stat and the focused diff, so this runs two commands and concatenates
       -- them (unlike commit_previewer).
+      -- Big commits (merges especially) list hundreds of files in `--stat`, pushing this
+      -- file's diff far below the preview. Above STAT_MAX_FILES, keep only this file's stat
+      -- line plus a note and the "N files changed" summary, so the diff stays in view.
+      -- Stat names may be shortened to ".../tail", so a line matches when relpath ends with
+      -- the shown tail. (`git show --stat <merge> -- path` prints nothing, hence the filter.)
+      local STAT_MAX_FILES = 15
+      local function collapse_stat(stat, relpath)
+        local first, last
+        for i, l in ipairs(stat) do
+          if l:match '^ [^ ].- | ' then
+            first = first or i
+            last = i
+          end
+        end
+        if not first or last - first + 1 <= STAT_MAX_FILES then
+          return stat
+        end
+        local mine = {}
+        for i = first, last do
+          local name = vim.trim(stat[i]:match '^(.-) | ')
+          local tail = name:match '^%.%.%.(/.*)$'
+          if name == relpath or (tail and relpath:sub(-#tail) == tail) then
+            table.insert(mine, stat[i])
+          end
+        end
+        local out = vim.list_slice(stat, 1, first - 1)
+        vim.list_extend(out, mine)
+        table.insert(out, string.format(' … %d other files hidden (<C-d> opens the whole commit)', last - first + 1 - #mine))
+        vim.list_extend(out, stat, last + 1)
+        return out
+      end
+
       local function commit_stat_diff_previewer(ctx)
         return previewers.new_buffer_previewer {
           title = 'Stat + File Diff',
@@ -291,6 +323,7 @@ return {
             local rev = entry.value
             -- `git show --stat` => message header + changed-files summary (all files)
             local stat = vim.fn.systemlist { 'git', '-C', ctx.root, '--no-pager', 'show', '--stat', rev }
+            stat = collapse_stat(stat, ctx.relpath)
             -- `--format=` suppresses the message so we don't repeat the header
             local diff = vim.fn.systemlist { 'git', '-C', ctx.root, '--no-pager', 'show', '--format=', rev, '--', ctx.relpath }
             local lines = vim.list_extend(stat, { '' })
