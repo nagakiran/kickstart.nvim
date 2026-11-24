@@ -77,6 +77,22 @@ return {
 
   -- in addition to liveq's (enter insert, alt-enter insert with title, ^o browser, ^y yank, ^v show)
   actions = {
+    ['alt-o'] = {
+      desc = 'jql in browser',
+      fn = function(items, source, query)
+        -- the site is that of the item links (https://site/browse/KEY), else of `jiratui-jql url` for any key
+        local link = items[1] and items[1].url ~= '' and items[1].url or vim.trim(require('liveq.util').run(source, { 'url', '--', 'X-1' }) or '')
+        local base = link:match '^(.-)/browse/'
+        if not base then
+          vim.notify('liveq: no Jira site to open the query on', vim.log.levels.WARN)
+          return
+        end
+        local jql = query:gsub('[^%w%-_.~]', function(c)
+          return ('%%%02X'):format(c:byte())
+        end)
+        vim.ui.open(base .. '/issues/?jql=' .. jql)
+      end,
+    },
     ['ctrl-t'] = {
       desc = 'tui',
       fn = function(items)

@@ -75,6 +75,7 @@ In the shell, a source is registered in `liveq.zsh` with `lq_register NAME CMD '
 ### `jira`
 
 - `jiratui-jql` from the jiratui repo (Python; shares the TUI's auth, JQL parser and saved queries).
+- `^o` opens the work item under the cursor in the browser, `alt-o` opens the whole query there (`/issues/?jql=…` on the site of the item links), and `^t` opens the work item in the jiratui TUI.
 - `alt-t` shows the results as a tree (`search --tree`):
   - each work item followed by its children, i.e. the stories of an epic and the subtasks of a story, two levels down (`parent in (...)`, ten parents per query, all at once)
   - a result that is a child of another result goes under it, and the children that the JQL does not find are dimmed
