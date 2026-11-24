@@ -24,6 +24,27 @@ function M.pick_command(source)
   return ('%s -l %s pick --cmd %s -- {q}'):format(vim.fn.shellescape(vim.v.progpath), vim.fn.shellescape(cli_path()), vim.fn.shellescape(backend))
 end
 
+--- The key hints of the fzf header, joined with ' · ' and wrapped onto as many lines as the picker's width needs.
+local function wrap_header(hints)
+  local width = require('fzf-lua.config').globals.winopts.width or 0.8
+  if width <= 1 then
+    width = math.floor(vim.o.columns * width)
+  end
+  width = width - 6 -- the border, fzf's pointer gutter and some slack
+  local lines, line = {}, ''
+  for _, hint in ipairs(hints) do
+    local candidate = line == '' and hint or line .. ' · ' .. hint
+    if line ~= '' and vim.fn.strdisplaywidth(candidate) > width then
+      table.insert(lines, line)
+      line = hint
+    else
+      line = candidate
+    end
+  end
+  table.insert(lines, line)
+  return table.concat(lines, '\n')
+end
+
 local function insert_text(win, text)
   if vim.api.nvim_win_is_valid(win) then
     vim.api.nvim_set_current_win(win)
@@ -394,7 +415,7 @@ function M.search(source, query)
       ['--delimiter'] = '\t',
       ['--with-nth'] = '2',
       ['--multi'] = true,
-      ['--header'] = table.concat(header, ' · '),
+      ['--header'] = wrap_header(header),
       ['--header-lines'] = source.header_row and 1 or nil,
     },
     actions = fzf_actions,
