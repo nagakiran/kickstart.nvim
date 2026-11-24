@@ -6,3 +6,4 @@ spell/
 .opencode/plans/rename_log.txt
 # lazy-lock.json
 lua/local_config.lua
+__pycache__/

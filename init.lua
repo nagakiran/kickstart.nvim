@@ -281,6 +281,7 @@ require 'globals'
 require 'autocommands'
 require 'bufreap'
 require 'nocut'
+require 'confluence'
 require 'leakguard'
 require 'vim'
 -- liveq: live query search (Jira via jiratui-jql: :JiraSearch, :JiraJql, <leader>j*; generic :Liveq {source})

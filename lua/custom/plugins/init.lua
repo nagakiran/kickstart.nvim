@@ -2,6 +2,16 @@
 --  I promise not to create any merge conflicts in this directory :)
 --
 -- See the kickstart.nvim README for more information
+
+--- img-clip's markdown image: the description typed at the prompt (img_clip_description, set by file_name) as the alt
+--- text, the cursor after it. Used only for the image that description named, not for a later paste of a file path.
+local function md_image_template(args)
+  local desc = vim.g.img_clip_description or ''
+  local named = args and args.file_name_no_ext == desc:lower():gsub('[^a-z0-9]', '_')
+  local alt = named and desc:gsub('[%[%]]', '') or ''
+  return '![' .. alt .. '$CURSOR]($FILE_PATH)'
+end
+
 return {
   {
     -- 'tbabej/taskwiki',
@@ -149,19 +159,31 @@ return {
         enabled = false,
       },
       default = {
+        -- The description names the file (lowercased, `_` for the rest) and, as typed, is the image's alt text.
         file_name = function()
-          local desctipion = vim.fn.input 'Description: '
-          return desctipion:lower():gsub('[^a-z0-9]', '_')
+          vim.g.img_clip_description = vim.fn.input 'Description: '
+          return (vim.g.img_clip_description:lower():gsub('[^a-z0-9]', '_'))
         end,
         prompt_for_file_name = false,
       },
       filetypes = {
         -- copy the file to the directory where markdown file is there
         markdown = {
+          template = md_image_template,
           relative_to_current_file = true,
           dir_path = function()
             return 'asset_' .. vim.fn.expand '%:t:r'
           end,
+        },
+      },
+      -- A scratch buffer ([No Name], no filetype) is usually a note on its way to becoming markdown: insert
+      -- `![](path)` there too, not the bare path, so it is still an image once saved as .md.
+      custom = {
+        {
+          trigger = function()
+            return vim.bo.filetype == ''
+          end,
+          template = md_image_template,
         },
       },
     },
