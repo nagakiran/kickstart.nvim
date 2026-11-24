@@ -238,11 +238,14 @@ function M.search(source, query)
   -- a source whose `show` takes `--match QUERY` highlights the query's words in the preview and writes the lines that
   -- have them to a file; the preview then scrolls to the first one (sent to fzf through --listen, since fzf only takes
   -- a scroll offset once the preview is complete), and alt-n/alt-p go to the next and previous ones
-  local preview_prefix, preview_match, preview_suffix = '', '', ''
+  local preview_clear, preview_prefix, preview_match, preview_suffix = '', '', '', ''
   if source.match then
     source.match_state = source.match_state or vim.fn.tempname()
     local state = vim.fn.shellescape(source.match_state)
     local cli = ('%s -l %s'):format(vim.fn.shellescape(vim.v.progpath), vim.fn.shellescape(cli_path()))
+    -- cleared first: a `show` that finds nothing to match (a query of filters only, e.g. type:calls) writes no file,
+    -- and the previous item's would scroll this preview to its line, or past its end
+    preview_clear = ('rm -f %s; '):format(state)
     preview_prefix = 'LIVEQ_MATCH_FILE=' .. state .. ' '
     preview_match = ' --match {q}'
     preview_suffix = ('; %s scroll %s >/dev/null 2>&1 &'):format(cli, state)
@@ -408,7 +411,16 @@ function M.search(source, query)
     exec_empty_query = true,
     keymap = { fzf = fzf_keymap },
     winopts = { title = ' ' .. source.title .. ' ', preview = { layout = 'vertical', vertical = 'down:50%', wrap = true }, on_create = on_create },
-    preview = image_env .. preview_prefix .. backend .. ' show' .. preview_flags .. preview_match .. ' -- {1}' .. preview_tee .. preview_suffix,
+    preview = preview_clear
+      .. image_env
+      .. preview_prefix
+      .. backend
+      .. ' show'
+      .. preview_flags
+      .. preview_match
+      .. ' -- {1}'
+      .. preview_tee
+      .. preview_suffix,
     fzf_opts = {
       ['--listen'] = source.match and true or nil, -- exports $FZF_PORT to the preview command
       ['--ansi'] = true,
