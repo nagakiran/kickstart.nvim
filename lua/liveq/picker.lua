@@ -407,7 +407,7 @@ function M.search(source, query)
     search = query,
     exec_empty_query = true,
     keymap = { fzf = fzf_keymap },
-    winopts = { title = ' ' .. source.title .. ' ', preview = { layout = 'vertical', vertical = 'down:50%' }, on_create = on_create },
+    winopts = { title = ' ' .. source.title .. ' ', preview = { layout = 'vertical', vertical = 'down:50%', wrap = true }, on_create = on_create },
     preview = image_env .. preview_prefix .. backend .. ' show' .. preview_flags .. preview_match .. ' -- {1}' .. preview_tee .. preview_suffix,
     fzf_opts = {
       ['--listen'] = source.match and true or nil, -- exports $FZF_PORT to the preview command

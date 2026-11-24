@@ -132,6 +132,7 @@ local TITLES = CACHE .. '/titles.json' -- topics of chats outside the list (meet
 local INDEX = CACHE .. '/index.json'
 local KEEP = tonumber(os.getenv 'LIVEQ_TEAMS_KEEP') -- nil: keep every message
 local DEEP = 300 -- messages per chat that `refresh --deep` backfills to, unless given
+local FETCH_MAX = 1000 -- messages a `show` fetches from Graph at most, for a chat that has none of them cached
 
 local function out(text)
   io.stdout:write(text, '\n')
@@ -1564,23 +1565,34 @@ local function messages(chat, count, fresh, any_cached)
   if any_cached then
     count = math.min(count, 100) -- "all cached" with nothing cached: a preview, not the whole history
   end
+  -- paging stops at a page that reaches the cache (the older messages are there already) or at FETCH_MAX, so a
+  -- large count (the chat buffer's whole history) costs a page or two, not the chat's whole history from Graph
+  local known = {}
+  for _, m in ipairs(cached and cached.messages or {}) do
+    known[m.id] = true
+  end
   local list, url = {}, '/chats/' .. chat.id .. '/messages?$top=50'
   local complete = false
-  while url and #list < count do
+  while url and #list < math.min(count, FETCH_MAX) do
     local page, err = api('GET', url)
     if not page then
       return nil, err
     end
+    local overlaps = false
     for _, m in ipairs(page.value or {}) do
       table.insert(list, trim_message(m))
+      overlaps = overlaps or known[m.id] == true
     end
     url = page['@odata.nextLink']
     complete = url == nil
+    if overlaps then
+      break
+    end
   end
   table.sort(list, by_time_desc)
   -- keyed by the newest message actually fetched: while the chat list is behind (its preview older than that), the
   -- keys differ and the chat is fetched again on each show, until a refresh catches the list up
-  store_messages(chat.id, list, complete)
+  local merged = store_messages(chat.id, list, complete)
   -- a newer message than the chat list knows of: bring the list's preview (and unread state) up to date with it
   local top = list[1]
   if top and top.id ~= newest then
@@ -1594,7 +1606,8 @@ local function messages(chat, count, fresh, any_cached)
       end
     end
   end
-  return list
+  -- the fetched messages and the older ones of the cache behind them
+  return vim.list_slice(merged, 1, count)
 end
 
 local function reaction_summary(list)

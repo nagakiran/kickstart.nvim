@@ -51,7 +51,7 @@ function M.load(source, buf)
   local win = vim.fn.bufwinid(buf)
   local width = win ~= -1 and vim.api.nvim_win_get_width(win) or 100
   vim.b[buf].teams_loading = true
-  run_async(source, { 'show', '--plain', '--chronological', '--fresh', '--count', '100', '--', id }, function(text)
+  run_async(source, { 'show', '--plain', '--chronological', '--fresh', '--count', '100000', '--', id }, function(text)
     if not vim.api.nvim_buf_is_valid(buf) then
       return
     end
