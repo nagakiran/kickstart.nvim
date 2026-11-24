@@ -307,6 +307,12 @@ require('liveq').setup {
       commands = { search = 'MrSearch', saved = 'MrSaved', resume = 'MrResume', query = 'MrQuery', show = 'MrShow' },
       keymaps = { search = '<leader>Ms', resume = '<leader>Mr', saved = '<leader>Mv', query = '<leader>Mq', show = '<leader>Mi', open = '<leader>Mo' },
     },
+    -- GitLab's activity feed (dashboard/activity): events by user, project, type; alt-t groups them by MR
+    activity = vim.fn.executable 'glab' == 1 and require 'liveq.sources.gitlab_activity' {
+      project = 'sd/security_director',
+      commands = { search = 'GitlabActivity', saved = 'GitlabActivitySaved', resume = 'GitlabActivityResume', query = 'GitlabActivityQuery' },
+      keymaps = { search = '<leader>Gs', resume = '<leader>Gr', saved = '<leader>Gv', query = '<leader>Gq' },
+    } or nil,
     bm = require 'liveq.sources.linkding' {
       commands = { search = 'BookmarkSearch', query = 'BookmarkQuery' },
       keymaps = { search = '<leader>lk' },

@@ -141,6 +141,32 @@ In the shell, a source is registered in `liveq.zsh` with `lq_register NAME CMD '
   - `alt-v` Diffview of the same branches (`:DiffviewOpen origin/TARGET...origin/SOURCE` after the same fetch): changed files in a panel, each side by side; `<leader>dq` closes it.
 - `:MrSearch`, `:MrResume`, `:MrSaved`, `<leader>Ms` (search), `<leader>Mr` (resume), `<leader>Mv` (saved), `<leader>Mq` (query), `<leader>Mi` (show), `<leader>Mo` (open).
 
+### `activity`
+
+- `backends/gitlab_activity.lua`, run with `nvim -l`, through `glab api` like `mr` (the two share `backends/gitlab_common.lua`).
+- GitLab's activity feed (dashboard/activity) in the terminal: a row per event (approved, commented, opened, merged, pushed, ...) with its time, user, MR or branch, title and the first line of the comment or commit.
+- With no query, your own activity, as on the page's first tab.
+- Query terms:
+  - `user:NAME` (`@me`; several: any of them) and `-user:NAME` to hide one (e.g. `-user:_sd-builder`, the CI bot)
+  - `project:PATH`: everyone's activity in the project; with `user:` too, those users' feeds, kept to the project
+  - `type:push|merge|issue|comment|wiki|design|team`, the tabs of the page (several: any of them), and `-type:` (`-type:push` hides the pushes, a third of a busy project's feed)
+  - `action:approved|commented|created|merged|pushed|closed|...` and `-action:`
+  - `mr:11096` (everything on one MR), `branch:NAME` (pushes to it)
+  - `since:7d|4h|today|yesterday|DATE`, `before:DATE`, `on:DATE|today|yesterday`, `sort:asc`
+  - any other word must appear in the title, the comment, the commit title, the branch, the user or the project.
+- GitLab filters by user or project, one action or type, and dates; the rest is filtered locally, so such queries read three times as many pages (up to 20 requests).
+- Completes users (members of the default project), projects, branches, types, actions and dates.
+- `alt-t` groups the events under their MR (issue or branch), in the order of the latest event; the MR's row lists who took part (`ksujith×11 nagakiran×8`), and its preview is the whole conversation in the list, oldest first, with each comment's file and line.
+- GitLab has no endpoint for one event, so the listed events are kept in `~/.cache/liveq/gitlab/HOST-events/` (removed after a month) for the preview.
+- Keys:
+  - `enter` opens the event in the browser (a comment at its note, a push at its commits)
+  - `alt-enter` inserts its MR (`project!iid`)
+  - `alt-m` shows the MR's details (the `mr` source's float)
+  - `alt-r` searches every event on its MR, `alt-u` only this user's events, `alt-h` hides this user.
+- Saved queries live in `~/.config/liveq/gitlab-activity-saved.tsv` (e.g. a team: `project:sd/security_director user:a user:b user:c -type:push`).
+- `:GitlabActivity`, `:GitlabActivityResume`, `:GitlabActivitySaved`, `<leader>Gs` (search), `<leader>Gr` (resume), `<leader>Gv` (saved), `<leader>Gq` (query); `lq activity` in the shell.
+- Not covered: the page's "Followed users" tab (GitLab has no feed for it; `user:` terms do it) and "Your projects" (one `project:` term per project).
+
 ### `bm`
 
 - `backends/linkding.lua`, run with `nvim -l`.

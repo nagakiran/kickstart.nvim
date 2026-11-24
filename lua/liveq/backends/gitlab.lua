@@ -39,144 +39,17 @@ local STATIC = {
   created = { '1d', '2d', '7d', '2w', '1M', '3M', '6M', '1y' },
   updated = { '1d', '2d', '7d', '2w', '1M', '3M', '6M', '1y' },
 }
-local DAY = 24 * 3600
+local C = dofile(vim.fs.joinpath(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)), 'gitlab_common.lua'))
+local out, fail, host, encode, api, api_async = C.out, C.fail, C.host, C.encode, C.api, C.api_async
+local terms_of, since, user, truncate = C.terms_of, C.since, C.user, C.truncate
+local cache_get, cache_set, me = C.cache_get, C.cache_set, C.me
+local DAY = C.DAY
 local MAX_CANDIDATES = 100
 
-local HOST = os.getenv 'LIVEQ_GITLAB_HOST'
 local DEFAULT_PROJECT = os.getenv 'LIVEQ_GITLAB_PROJECT' or 'sd/security_director'
-local CACHE_DIR = (os.getenv 'XDG_CACHE_HOME' or (os.getenv 'HOME' .. '/.cache')) .. '/liveq/gitlab'
-local SAVED_FILE = (os.getenv 'XDG_CONFIG_HOME' or (os.getenv 'HOME' .. '/.config')) .. '/liveq/gitlab-saved.tsv'
-
-local function out(text)
-  io.stdout:write(text, '\n')
-end
-
-local function fail(message, code)
-  io.stderr:write('liveq-gitlab: ' .. message .. '\n')
-  os.exit(code or 1)
-end
-
-local function host()
-  if not HOST or HOST == '' then
-    local result = vim.system({ 'glab', 'config', 'get', 'host' }, { text = true }):wait()
-    HOST = vim.trim(result.stdout or '')
-    if HOST == '' then
-      HOST = 'gitlab.com'
-    end
-  end
-  return HOST
-end
-
-local function encode(s)
-  return (s:gsub('[^%w%-%._~]', function(c)
-    return ('%%%02X'):format(c:byte())
-  end))
-end
-
--- -- cache --------------------------------------------------------------------------------------------------------
-
-local function cache_path(key)
-  return CACHE_DIR .. '/' .. host() .. '-' .. key:gsub('[^%w%-_.]', '_') .. '.json'
-end
-
-local function cache_get(key, ttl)
-  local path = cache_path(key)
-  local stat = vim.uv.fs_stat(path)
-  if not stat or os.time() - stat.mtime.sec > ttl then
-    return nil
-  end
-  local file = io.open(path, 'r')
-  if not file then
-    return nil
-  end
-  local ok, data = pcall(vim.json.decode, file:read '*a', { luanil = { object = true, array = true } })
-  file:close()
-  return ok and data or nil
-end
-
-local function cache_set(key, data)
-  vim.fn.mkdir(CACHE_DIR, 'p')
-  local file = io.open(cache_path(key), 'w')
-  if file then
-    file:write(vim.json.encode(data))
-    file:close()
-  end
-end
-
--- -- API ----------------------------------------------------------------------------------------------------------
-
---- Starts `glab api PATH`; returns a function that waits for it and returns the decoded JSON, or nil and an error.
-local function api_async(path)
-  local job = vim.system({ 'glab', 'api', '--hostname', host(), path }, { text = true })
-  return function()
-    local result = job:wait(60000)
-    if result.code ~= 0 then
-      local message = vim.trim((result.stderr ~= '' and result.stderr) or result.stdout or '')
-      return nil, message ~= '' and message or ('glab exited with ' .. result.code)
-    end
-    local ok, data = pcall(vim.json.decode, result.stdout or 'null', { luanil = { object = true, array = true } })
-    if not ok then
-      return nil, 'invalid JSON from glab'
-    end
-    return data
-  end
-end
-
-local function api(path)
-  return api_async(path)()
-end
-
-local function me()
-  local cached = cache_get('me', 30 * DAY)
-  if cached and cached.username then
-    return cached.username
-  end
-  local user = api 'user'
-  if user and user.username then
-    cache_set('me', { username = user.username })
-    return user.username
-  end
-  return nil
-end
+local SAVED_FILE = C.CONFIG_DIR .. '/gitlab-saved.tsv'
 
 -- -- query --------------------------------------------------------------------------------------------------------
-
---- Splits a query into terms, keeping quoted values together: `label:"needs review" fix` -> two terms.
-local function terms_of(query)
-  local terms, current, quoted = {}, {}, false
-  for _, ch in ipairs(vim.split(query, '')) do
-    if ch == '"' then
-      quoted = not quoted
-    elseif ch:match '%s' and not quoted then
-      if #current > 0 then
-        table.insert(terms, table.concat(current))
-        current = {}
-      end
-    else
-      table.insert(current, ch)
-    end
-  end
-  if #current > 0 then
-    table.insert(terms, table.concat(current))
-  end
-  return terms
-end
-
-local function since(value)
-  local n, unit = value:match '^(%d+)([dwMy])$'
-  if not n then
-    return value -- a date, as typed
-  end
-  local seconds = ({ d = DAY, w = 7 * DAY, M = 30 * DAY, y = 365 * DAY })[unit] * tonumber(n)
-  return os.date('!%Y-%m-%dT%H:%M:%SZ', os.time() - seconds)
-end
-
-local function user(value)
-  if value == '@me' or value == 'me' then
-    return me() or value
-  end
-  return (value:gsub('^@', ''))
-end
 
 --- Turns a query into the API calls of a search: a list of paths (several when the results are a union).
 local function plan(query, limit)
@@ -266,37 +139,6 @@ local function plan(query, limit)
 end
 
 -- -- search -------------------------------------------------------------------------------------------------------
-
-local function parse(args)
-  local opts, rest = {}, {}
-  local i = 1
-  while i <= #args do
-    local a = args[i]
-    if a == '--' then
-      vim.list_extend(rest, vim.list_slice(args, i + 1))
-      break
-    elseif a == '--plain' then
-      opts.plain = true
-      i = i + 1
-    elseif a:match '^%-' and args[i + 1] then
-      opts[(a:gsub('^%-+', ''))] = args[i + 1]
-      i = i + 2
-    else
-      table.insert(rest, a)
-      i = i + 1
-    end
-  end
-  return opts, rest
-end
-
-local function truncate(s, width)
-  s = (s or ''):gsub('%s+', ' ')
-  local n = vim.fn.strchars(s)
-  if n > width then
-    return vim.fn.strcharpart(s, 0, width - 1) .. '…'
-  end
-  return s .. string.rep(' ', width - n)
-end
 
 local STATE_COLOUR = { opened = '32', merged = '35', closed = '31', locked = '33' }
 
@@ -449,12 +291,10 @@ end
 
 -- -- complete -----------------------------------------------------------------------------------------------------
 
-local function candidate(display, insert, kind, detail)
-  return { display = display, insert = insert, cursor_offset = vim.fn.strchars(insert), kind = kind, detail = detail or '' }
-end
+local candidate, quote = C.candidate, C.quote
 
-local function quote(value)
-  return value:find '[%s"]' and ('"' .. value:gsub('"', '') .. '"') or value
+local function matching(values, typed)
+  return C.matching(values, typed, MAX_CANDIDATES)
 end
 
 local function cached_list(key, path, field, ttl)
@@ -497,17 +337,7 @@ local function values_for(key, typed, project)
       return { v }
     end, matching(STATIC[key], typed))
   elseif key == 'author' or key == 'assignee' or key == 'reviewer' then
-    local result = { { '@me', 'you' } }
-    if typed ~= '' and not ('@me'):find(typed, 1, true) then
-      result = {}
-    end
-    local members = api(('projects/%s/members/all?per_page=50&query=%s'):format(p, encode((typed:gsub('^@', ''))))) or {}
-    for _, m in ipairs(members) do
-      if m.username and m.state ~= 'blocked' then
-        table.insert(result, { m.username, m.name })
-      end
-    end
-    return result
+    return C.users(project == 'all' and DEFAULT_PROJECT or project, typed)
   elseif key == 'label' or key == '-label' then
     local labels = cached_list('labels-' .. p, ('projects/%s/labels?per_page=100&include_ancestor_groups=true'):format(p), 'name', DAY)
     return vim.tbl_map(function(v)
@@ -524,15 +354,7 @@ local function values_for(key, typed, project)
       return { b.name }
     end, branches)
   elseif key == 'project' then
-    local result = { { 'all', 'every project' }, { DEFAULT_PROJECT, 'default' } }
-    if typed ~= '' then
-      result = {}
-      local projects = api(('projects?membership=true&simple=true&per_page=30&search=%s'):format(encode(typed))) or {}
-      for _, project_data in ipairs(projects) do
-        table.insert(result, { project_data.path_with_namespace })
-      end
-    end
-    return result
+    return C.projects(typed, { { 'all', 'every project' }, { DEFAULT_PROJECT, 'default' } })
   end
   return {}
 end
@@ -540,22 +362,7 @@ end
 local function complete(opts, rest)
   local text = rest[1] or ''
   local cursor = tonumber(opts.c or opts.cursor) or vim.fn.strchars(text)
-  local before = vim.fn.strcharpart(text, 0, cursor)
-  local start, in_quote = cursor, false
-  for i = cursor, 1, -1 do
-    local ch = vim.fn.strcharpart(before, i - 1, 1)
-    if ch == '"' then
-      in_quote = not in_quote
-    elseif not in_quote and ch:match '%s' then
-      break
-    end
-    start = i - 1
-  end
-  local finish, length = cursor, vim.fn.strchars(text)
-  while finish < length and not vim.fn.strcharpart(text, finish, 1):match '%s' do
-    finish = finish + 1
-  end
-  local term = vim.fn.strcharpart(text, start, cursor - start)
+  local start, finish, term = C.term_at(text, cursor)
   local key, value = term:match '^(%-?[%w_]+):(.*)$'
 
   local context, candidates = 'field', {}
@@ -578,56 +385,12 @@ end
 
 -- -- saved queries ------------------------------------------------------------------------------------------------
 
-local function read_saved()
-  local entries = {}
-  local file = io.open(SAVED_FILE, 'r')
-  if file then
-    for line in file:lines() do
-      local label, query = line:match '^([^\t]+)\t(.+)$'
-      if label then
-        table.insert(entries, { label = label, query = query })
-      end
-    end
-    file:close()
-  end
-  return entries
-end
-
 local function saved()
-  for _, e in ipairs(read_saved()) do
-    out(('%s\t%s\t%s\tsaved'):format(e.label, e.query, e.label))
-  end
+  C.saved(SAVED_FILE)
 end
 
 local function save(opts, rest)
-  local query = vim.trim(table.concat(rest, ' '))
-  if query == '' then
-    fail 'a query is required'
-  end
-  local label = opts.label or opts.l
-  if not label then
-    io.stderr:write('Saving: ' .. query .. '\nLabel: ')
-    local tty = io.open('/dev/tty', 'r')
-    label = tty and tty:read '*l' or nil
-    if tty then
-      tty:close()
-    end
-  end
-  label = label and vim.trim((label:gsub('\t', ' '))) or ''
-  if label == '' then
-    fail 'a label is required'
-  end
-  local entries = vim.tbl_filter(function(e)
-    return e.label ~= label
-  end, read_saved())
-  table.insert(entries, { label = label, query = query })
-  vim.fn.mkdir(vim.fs.dirname(SAVED_FILE), 'p')
-  local file = assert(io.open(SAVED_FILE, 'w'))
-  for _, e in ipairs(entries) do
-    file:write(e.label, '\t', e.query, '\n')
-  end
-  file:close()
-  io.stderr:write('Saved: ' .. label .. '\n')
+  C.save(SAVED_FILE, opts, rest)
 end
 
 -- -- sort ---------------------------------------------------------------------------------------------------------
@@ -656,4 +419,4 @@ local command = _G.arg[1]
 if not commands[command] then
   fail('unknown command: ' .. tostring(command) .. ' (expected: ' .. table.concat(vim.tbl_keys(commands), ', ') .. ')', 2)
 end
-commands[command](parse(vim.list_slice(_G.arg, 2)))
+commands[command](C.parse(vim.list_slice(_G.arg, 2)))
