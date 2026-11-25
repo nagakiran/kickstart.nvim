@@ -19,6 +19,8 @@ Commands: `:Liveq {source} [query]`, `:LiveqResume [source]` (also `<leader>lr`:
 
 Keys in the picker: `tab` complete the query · `ctrl-space` select · `enter` insert the id(s) at the cursor · `alt-enter` insert "id - title" · `ctrl-o` browser · `alt-x` links of the preview (the one of the message at the current match opens at once when it is the only one there; otherwise all of them are listed on the terminal, that message's first) · `ctrl-y` yank "id - title" · `ctrl-v` details float · `alt-b` open in a buffer (`liveq://SOURCE/ID`, reused when opened again) · `alt-n`/`alt-p` next/previous match of the query in the preview (sources with `match`) · `alt-t` threaded view (sources with `tree`) · `alt-s` sort the results (sources with `sort`: a list of the ways to sort, e.g. by a column shown; the choice is written into the query, so the server sorts and saved queries keep it) · `alt-c` next set of columns (sources with `views`; the prompt names it, e.g. `jql [people]> `) · `alt-f` filter the results already listed instead of querying the server (fuzzy over the whole row; the prompt reads `filter> `, nothing reloads; `alt-f` again restores the query and runs it once more) · `alt-e` edit the query in a buffer with completion (`<CR>` in normal mode or `:w` searches with it) · `ctrl-r`/`ctrl-s` saved queries (`esc` in the list of saved ones goes back to the search) · `ctrl-q` all results into a Markdown buffer; plus the source's own actions.
 
+`esc` always goes back one step: in a list that a key shows on the terminal (`tab`, `alt-s`, `alt-x`) it closes that list and leaves the search as it was; in a picker opened from the search (saved queries, a gallery) it reruns the search with its query; in the search itself it hides the picker (`<leader>lr` brings it back).
+
 ## Backend contract
 
 A backend is any executable. Required subcommands:
@@ -240,6 +242,7 @@ In the shell, a source is registered in `liveq.zsh` with `lq_register NAME CMD '
   - Neovim's environment reaches that zsh through a mode-600 file it sources and deletes.
 - Outside tmux, or without `~/rcfiles/.zsh/liveq.zsh` (`$LIVEQ_ZSH`), the fzf-lua picker as before.
 - `LIVEQ_TEAMS_IMAGE_FORMAT` forces `symbols`, `kitty`, `sixels` or `iterm`; without chafa or kitten the preview stays as it was.
+- Loop components in a message (Teams' `fluidEmbedCard`) show as `[loop: NAME · edited by WHO WHEN] URL`, the link opening it in Loop on the web (`alt-x links`). The name and last edit come from Graph's `/shares` for the `.loop` file in the sender's OneDrive, cached 10 minutes in `loops.json`; this needs `Files.Read.All`, granted with `o365_auth.py consent --scope https://graph.microsoft.com/Files.Read.All ACCOUNT`, and without it the line is just `[loop] URL`. Graph gives no way to read a component's contents.
 - `enter` opens a chat buffer (`teams://NAME`, oldest at the top, cursor on the newest; opening marks the chat read). Its keys:
   - `r`/`o` reply in a compose split that `:w` sends after a confirmation:
     - `<localleader>id` drafts the reply with Claude: the points typed in the split, the chat's last 20 messages and a guide to my style, `~/rcfiles/.claude/skills/teams-reply/style.md` (`$LIVEQ_TEAMS_STYLE`), go to `claude -p` (Claude Code's CLI and login; `$LIVEQ_TEAMS_DRAFT_MODEL`, default sonnet; no tools, no MCP, no session kept)

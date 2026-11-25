@@ -22,7 +22,7 @@ local function run(source, args, done)
   end)
 end
 
-function M.open(source, id)
+function M.open(source, id, opts)
   local ok, fzf = pcall(require, 'fzf-lua')
   if not ok then
     return
@@ -40,13 +40,17 @@ function M.open(source, id)
       end
     end
   end
-  fzf.fzf_exec(backend .. ' images -f fzf -- ' .. vim.fn.shellescape(id), {
-    prompt = 'images> ',
-    winopts = { title = ' Images ', preview = { layout = 'vertical', vertical = 'down:75%' } },
-    preview = backend .. ' image -- {1}',
-    fzf_opts = { ['--ansi'] = true, ['--delimiter'] = '\t', ['--with-nth'] = '2', ['--no-sort'] = true, ['--header'] = 'enter copy · ^o open' },
-    actions = { ['enter'] = action '--copy', ['ctrl-o'] = action '--open' },
-  })
+  -- opts.back: the query of the search the gallery was opened from (alt-g), which esc goes back to
+  fzf.fzf_exec(
+    backend .. ' images -f fzf -- ' .. vim.fn.shellescape(id),
+    require('liveq.picker').back_to_search(source, (opts or {}).back, {
+      prompt = 'images> ',
+      winopts = { title = ' Images ', preview = { layout = 'vertical', vertical = 'down:75%' } },
+      preview = backend .. ' image -- {1}',
+      fzf_opts = { ['--ansi'] = true, ['--delimiter'] = '\t', ['--with-nth'] = '2', ['--no-sort'] = true, ['--header'] = 'enter copy · ^o open' },
+      actions = { ['enter'] = action '--copy', ['ctrl-o'] = action '--open' },
+    })
+  )
 end
 
 return M

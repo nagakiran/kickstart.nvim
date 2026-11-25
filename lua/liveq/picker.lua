@@ -24,6 +24,69 @@ function M.pick_command(source)
   return ('%s -l %s pick --cmd %s -- {q}'):format(vim.fn.shellescape(vim.v.progpath), vim.fn.shellescape(cli_path()), vim.fn.shellescape(backend))
 end
 
+--- Whether the fzf in the terminal buffer `bufnr` is running an fzf of its own: a picker on the terminal started by an
+--- `execute` bind (tab's completion, alt-s, alt-x's links), found as an fzf below the picker's fzf among the job's
+--- processes.
+local function nested_fzf(bufnr)
+  local ok, pid = pcall(vim.fn.jobpid, vim.bo[bufnr].channel)
+  if not ok or not pid or pid <= 0 then
+    return false
+  end
+  local function below(p, inside)
+    local proc = vim.api.nvim_get_proc(p)
+    local is_fzf = proc and proc.name and vim.fs.basename(proc.name) == 'fzf'
+    if is_fzf and inside then
+      return true
+    end
+    for _, child in ipairs(vim.api.nvim_get_proc_children(p) or {}) do
+      if below(child, inside or is_fzf) then
+        return true
+      end
+    end
+    return false
+  end
+  return below(pid, false)
+end
+
+--- Makes esc in the picker of `bufnr` reach a picker running on its terminal (closing that one, back to this) instead
+--- of hiding this one: fzf-lua's `hide` profile maps esc in the window to hide it first, which took the whole picker
+--- down from alt-x's links. Otherwise esc does what it did (that mapping, or plain esc to fzf).
+function M.esc_reaches_nested(bufnr)
+  local before = vim.fn.maparg('<Esc>', 't', false, true)
+  local previous = type(before) == 'table' and before.buffer == 1 and before.callback or nil
+  vim.keymap.set('t', '<Esc>', function()
+    if not previous or nested_fzf(bufnr) then
+      vim.api.nvim_chan_send(vim.bo[bufnr].channel, '\27')
+    else
+      previous()
+    end
+  end, { buffer = bufnr, nowait = true })
+end
+
+--- The options that make esc in a picker opened from a search (saved queries, a gallery) go back to that search, with
+--- `query`, instead of closing: merged into the picker's fzf-lua `opts`. Nothing when `query` is nil.
+function M.back_to_search(source, query, opts)
+  if query == nil then
+    return opts
+  end
+  -- the `hide` profile of fzf-lua replaces the esc action with hiding the picker, so without no_hide esc would not go
+  -- back to the search; esc is mapped in the window so that the `<Esc><Esc>` terminal mapping does not hold it back
+  opts.no_hide = true
+  opts.winopts = opts.winopts or {}
+  local on_create = opts.winopts.on_create
+  opts.winopts.on_create = function(e)
+    vim.keymap.set('t', '<Esc>', '<Esc>', { buffer = e.bufnr, nowait = true })
+    if on_create then
+      on_create(e)
+    end
+  end
+  opts.actions = opts.actions or {}
+  opts.actions['esc'] = function()
+    M.search(source, query)
+  end
+  return opts
+end
+
 --- The key hints of the fzf header, joined with ' · ' and wrapped onto as many lines as the picker's width needs.
 local function wrap_header(hints)
   local width = require('fzf-lua.config').globals.winopts.width or 0.8
@@ -157,9 +220,9 @@ function M.search(source, query)
   if source.gallery then
     actions['alt-g'] = {
       desc = 'gallery',
-      fn = function(items)
+      fn = function(items, _, query)
         if items[1] then
-          require('liveq.gallery').open(source, items[1].id)
+          require('liveq.gallery').open(source, items[1].id, { back = query })
         end
       end,
     }
@@ -256,14 +319,16 @@ function M.search(source, query)
     table.insert(header, 'alt-n/p match')
   end
   -- a source whose `show --images` draws images gets them drawn for real over its block art, by image.nvim (images.lua)
-  local image_env, on_create = '', nil
+  local image_env, draw_images = '', false
   if source.images then
     source.image_state = source.image_state or vim.fn.tempname()
     image_env = require('liveq.images').env(source.image_state)
-    if image_env ~= '' then
-      on_create = function(e)
-        require('liveq.images').attach(e.bufnr, source.image_state)
-      end
+    draw_images = image_env ~= ''
+  end
+  local on_create = function(e)
+    M.esc_reaches_nested(e.bufnr) -- esc in tab's, alt-s's or alt-x's picker closes that one, back to the search
+    if draw_images then
+      require('liveq.images').attach(e.bufnr, source.image_state)
     end
   end
   -- alt-x opens the links of the preview: a copy of it is kept in a file (`tee`), and `cli.lua links` opens the link of
@@ -480,35 +545,26 @@ function M.saved(source, opts)
   local query_of = function(selected)
     return selected[1] and vim.split(selected[1], '\t', { plain = true })[1]
   end
-  fzf.fzf_exec(entries, {
-    prompt = 'saved> ',
-    -- the `hide` profile of fzf-lua replaces the esc action with hiding the picker, so without no_hide esc would not go
-    -- back to the search; esc is mapped in the window so that the `<Esc><Esc>` terminal mapping does not hold it back
-    no_hide = opts.back ~= nil,
-    winopts = {
-      title = ' Saved: ' .. source.title .. ' ',
-      height = 0.4,
-      on_create = opts.back and function(e)
-        vim.keymap.set('t', '<Esc>', '<Esc>', { buffer = e.bufnr, nowait = true })
-      end or nil,
-    },
-    fzf_opts = { ['--ansi'] = true, ['--delimiter'] = '\t', ['--with-nth'] = '2,3' },
-    actions = {
-      ['enter'] = function(selected)
-        if query_of(selected) then
-          M.search(source, query_of(selected))
-        end
-      end,
-      ['alt-e'] = function(selected)
-        if query_of(selected) then
-          require('liveq.buffer').open(source, query_of(selected))
-        end
-      end,
-      ['esc'] = opts.back and function()
-        M.search(source, opts.back)
-      end or nil,
-    },
-  })
+  fzf.fzf_exec(
+    entries,
+    M.back_to_search(source, opts.back, {
+      prompt = 'saved> ',
+      winopts = { title = ' Saved: ' .. source.title .. ' ', height = 0.4 },
+      fzf_opts = { ['--ansi'] = true, ['--delimiter'] = '\t', ['--with-nth'] = '2,3' },
+      actions = {
+        ['enter'] = function(selected)
+          if query_of(selected) then
+            M.search(source, query_of(selected))
+          end
+        end,
+        ['alt-e'] = function(selected)
+          if query_of(selected) then
+            require('liveq.buffer').open(source, query_of(selected))
+          end
+        end,
+      },
+    })
+  )
 end
 
 return M

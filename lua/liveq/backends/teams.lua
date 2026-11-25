@@ -65,7 +65,8 @@
 -- further), joined by call id. Teams keeps no join or leave times (every participant's duration in the event is the
 -- call's length), so a meeting's time is its length, an upper bound; overlapping meetings count once in a day's total.
 --
--- Auth: a Graph token (Chat.ReadWrite, User.Read) printed by LIVEQ_TEAMS_TOKEN_CMD, by default
+-- Auth: a Graph token (Chat.ReadWrite, User.Read; Files.ReadWrite to attach files, Files.Read.All to name Loop
+-- components) printed by LIVEQ_TEAMS_TOKEN_CMD, by default
 -- `~/.venvs/mail/bin/python ~/rcfiles/bin/mail/o365_auth.py token-graph $LIVEQ_TEAMS_ACCOUNT` (account defaulting to
 -- $HPE_MAIL_ADDR). It is cached until a few minutes before it expires, so most calls do not start Python. The token
 -- reaches curl through a header file (mode 600), never through its argv, which any process could read.
@@ -438,6 +439,18 @@ local function strip_tags(s)
   return entities((s:gsub('<[^>]*>', '')))
 end
 
+--- How an attachment reads in a message: a Loop component (fluidEmbedCard) as `[loop] url`, its link without the
+--- `nav` query (Teams' own context for the Loop app, which the link opens fine without); any other as `[file: name] url`.
+--- Graph does not give a Loop component's text: it lives in a .loop file in the sender's OneDrive, behind Files.Read.All.
+local function attachment_line(a)
+  if a.contentType == 'application/vnd.microsoft.card.fluidEmbedCard' then
+    local ok, card = pcall(vim.json.decode, a.content or '')
+    local url = ok and type(card) == 'table' and type(card.componentUrl) == 'string' and card.componentUrl
+    return '[loop]' .. (url and (' ' .. url:gsub('%?nav=[^&]*$', '')) or '')
+  end
+  return '[file: ' .. (a.name or a.contentType or '?') .. ']' .. (a.contentUrl and (' ' .. a.contentUrl) or '')
+end
+
 --- The text of a message body. `attachments` resolves the `<attachment id=...>` placeholders: quoted replies
 --- (messageReference) become `> Sender: preview` lines, files become `[file: name] url`. Images pasted into the message
 --- (hosted by Teams) become `[image]`, and when `images` is given, their URL and size are added to it in that order.
@@ -468,7 +481,7 @@ local function body_text(body, attachments, images)
       end
       return ''
     end
-    return '\n[file: ' .. (a.name or a.contentType or '?') .. ']' .. (a.contentUrl and (' ' .. a.contentUrl) or '') .. '\n'
+    return '\n' .. attachment_line(a) .. '\n'
   end)
   s = s:gsub('<codeblock[^>]*>(.-)</codeblock>', function(code)
     code = code:gsub('<br%s*/?>', '\n'):gsub('</div>', '\n')
@@ -508,7 +521,7 @@ local function body_text(body, attachments, images)
   -- what is left in by_id was not placed in the body (Teams usually places them): list files at the end
   for _, a in pairs(by_id) do
     if a.contentType ~= 'messageReference' then
-      text = text .. '\n[file: ' .. (a.name or a.contentType or '?') .. ']' .. (a.contentUrl and (' ' .. a.contentUrl) or '')
+      text = text .. '\n' .. attachment_line(a)
     end
   end
   return text
@@ -523,6 +536,89 @@ local function render_quotes(text, plain)
         return '> **' .. who .. ':** ' .. preview .. '\n\n'
       end
       return '\27[2m│ ' .. who .. ': ' .. preview .. '\27[0m\n'
+    end)
+  )
+end
+
+-- -- Loop components ----------------------------------------------------------------------------------------------
+
+-- What the `[loop] url` lines of the messages shown point at: the .loop file's name, who last edited it and when, by
+-- url, from Graph's /shares (Files.Read.All, since the file is in the sender's OneDrive). Kept LOOP_TTL seconds, so a
+-- preview redrawn as you type costs no calls; a link Graph refuses is kept as { err } just as long.
+local LOOPS = CACHE .. '/loops.json'
+local LOOP_TTL = 600
+local LOOP_LINE = '%[loop%] (https://%S+)'
+
+local function share_id(url)
+  return 'u!' .. vim.base64.encode(url):gsub('=+$', ''):gsub('/', '_'):gsub('%+', '-')
+end
+
+--- The Loop files behind `urls`, by url: { name, by, at } or { err }. Fetches those not cached (or stale) through
+--- $batch requests of 20; when Graph cannot be reached, what it has.
+local function loop_info(urls)
+  local cache = read_json(LOOPS) or {}
+  local now, want, seen = os.time(), {}, {}
+  for _, url in ipairs(urls) do
+    local c = cache[url]
+    if not seen[url] and (not c or now - (c.checked or 0) > LOOP_TTL) then
+      seen[url] = true
+      table.insert(want, url)
+    end
+  end
+  for i = 1, #want, 20 do
+    local group, requests = vim.list_slice(want, i, i + 19), {}
+    for j, url in ipairs(group) do
+      local path = '/shares/' .. share_id(url) .. '/driveItem?$select=name,lastModifiedDateTime,lastModifiedBy'
+      table.insert(requests, { id = tostring(j), method = 'GET', url = path })
+    end
+    local reply = api('POST', '/$batch', { requests = requests })
+    if not reply then
+      break
+    end
+    for _, r in ipairs(reply.responses or {}) do
+      local url = group[tonumber(r.id)]
+      if url and r.status == 200 and r.body then
+        cache[url] = {
+          checked = now,
+          name = (r.body.name or ''):gsub('%.loop$', ''),
+          by = vim.tbl_get(r.body, 'lastModifiedBy', 'user', 'displayName'),
+          at = r.body.lastModifiedDateTime,
+        }
+      elseif url and r.status ~= 429 then
+        cache[url] = { checked = now, err = r.status }
+      end
+    end
+  end
+  if #want > 0 then
+    write_json(LOOPS, cache)
+  end
+  return cache
+end
+
+--- The urls of the `[loop]` lines in some messages.
+local function loop_urls(list)
+  local urls = {}
+  for _, m in ipairs(list) do
+    for url in (m.text or ''):gmatch(LOOP_LINE) do
+      table.insert(urls, url)
+    end
+  end
+  return urls
+end
+
+--- `text` with each `[loop] url` line naming its file and last edit, when `info` knows it.
+local function describe_loops(text, info, plain)
+  return (
+    text:gsub(LOOP_LINE, function(url)
+      local i = info[url]
+      if not i or not i.name then
+        return nil
+      end
+      local edit = (i.by and (' · edited by ' .. i.by) or '') .. (i.at and (' ' .. long_time(i.at)) or '')
+      if plain then
+        return ('[loop: **%s**%s] %s'):format(i.name, edit, url)
+      end
+      return ('\27[1m[loop: %s\27[0m\27[2m%s\27[0m\27[1m]\27[0m %s'):format(i.name, edit, url)
     end)
   )
 end
@@ -1991,6 +2087,8 @@ local function show(opts, rest)
       or 'When each call ended. Duration and people only for calls that also posted to a chat; Graph gives the rest no detail.'
     vim.list_extend(lines, { plain and ('_' .. note .. '_') or ('\27[2m' .. note .. '\27[0m'), '' })
   end
+  -- the Loop files linked in the messages shown (the newest 100 of a search's), named from Graph
+  local loops = loop_info(vim.list_slice(loop_urls(list), 1, 100))
   for _, m in ipairs(list) do
     local who = m.fromId == my_id and 'You' or (m.from or '?')
     local t = (on or from) and epoch(m.at)
@@ -2084,7 +2182,8 @@ local function show(opts, rest)
       if m.subject and m.subject ~= '' then
         table.insert(lines, plain and ('**' .. m.subject .. '**') or ('\27[1m' .. m.subject .. '\27[0m'))
       end
-      table.insert(lines, render_quotes((draw or links) and with_images(m.text, m, drawn) or m.text, plain))
+      local text = describe_loops(m.text, loops, plain)
+      table.insert(lines, render_quotes((draw or links) and with_images(text, m, drawn) or text, plain))
       table.insert(lines, '')
     end
     -- the message counts for `on:` and `from:` (the preview jumps to those of the day, or of the sender)
