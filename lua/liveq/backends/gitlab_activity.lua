@@ -14,6 +14,8 @@
 --   action:approved|closed|commented|created|destroyed|expired|joined|left|merged|pushed|reopened|updated   -action:
 --   mr:11096 (events on that MR: opened, comments, approvals, pushes, merge; read from the MR itself, of everyone
 --   unless user: is given, in project: or the default project)   branch:NAME (pushes to it)
+--   mentions:@me|NAME (the comments that tag the user, by anyone unless user: is given, in project: or the default
+--   project; read from GitLab's search of comments, so they go back years)
 --   since:7d|4h|today|yesterday|DATE   before:DATE   on:DATE|today|yesterday   sort:asc (oldest first)
 --   any other word must appear in the title, the comment, the commit title, the branch, the author or the project.
 --
@@ -41,6 +43,7 @@ local PREFIXES = {
   { '-action:', 'hide an action' },
   { 'mr:', 'events on one merge request (its iid)' },
   { 'branch:', 'pushes to a branch' },
+  { 'mentions:', 'comments that tag a user (@me for you)' },
   { 'since:', '7d, 4h, today, yesterday or a date' },
   { 'before:', 'a date' },
   { 'on:', 'a date, today or yesterday' },
@@ -359,7 +362,7 @@ end
 
 -- -- query --------------------------------------------------------------------------------------------------------
 
-local mr_events
+local mr_events, mention_events
 
 local function plan(query, limit)
   local f = { users = {}, not_users = {}, types = {}, not_types = {}, actions = {}, not_actions = {}, projects = {}, words = {}, mrs = {}, branches = {} }
@@ -395,6 +398,8 @@ local function plan(query, limit)
         f.has_mr = true
       elseif key == 'branch' then
         table.insert(f.branches, value)
+      elseif key == 'mentions' then
+        f.mentions = C.user(value)
       elseif key == 'since' or key == 'before' or key == 'on' then
         local span = C.span(value)
         local start = span and (os.time() - span) or day_start(value)
@@ -446,6 +451,7 @@ local function plan(query, limit)
     or (#f.actions > 1)
     or (#f.projects > 0 and #f.users > 0)
     or f.has_mr
+    or f.mentions ~= nil
     or #f.branches > 0
   -- with users, their own feeds (which reach further back for one person than the project's), the projects checked
   -- here; else the projects' feeds, every user in them
@@ -490,7 +496,7 @@ local function matches(e, f)
   if f.not_users[author] then
     return false
   end
-  if f.has_mr and #f.users > 0 and not vim.tbl_contains(f.users, author) then
+  if (f.has_mr or f.mentions) and #f.users > 0 and not vim.tbl_contains(f.users, author) then
     return false
   end
   if #f.users > 0 and #f.projects > 0 and not vim.tbl_contains(f.projects, e._path) then
@@ -663,6 +669,74 @@ mr_events = function(f)
   return events
 end
 
+--- The comments that tag f.mentions (`@NAME`), as events, from GitLab's search of the comments of each project
+--- (every page); the titles of their MRs and issues are read in batches. Without advanced search GitLab searches
+--- comments only within a project, so it is one project at a time. Each event is `n` + the note id, as those of `mr:`.
+mention_events = function(f)
+  local projects = #f.projects > 0 and f.projects or { DEFAULT_PROJECT }
+  local events = {}
+  for _, project in ipairs(projects) do
+    local notes = {}
+    for page = 1, MAX_REQUESTS do
+      local path = ('projects/%s/search?scope=notes&search=%s&per_page=%d&page=%d'):format(encode(project), encode('@' .. f.mentions), PER_PAGE, page)
+      local data, err = C.api(path)
+      if not data then
+        return nil, err
+      end
+      vim.list_extend(notes, data)
+      if #data < PER_PAGE then
+        break
+      end
+    end
+    -- the titles: the MRs and issues of the comments, 50 at a time
+    local KINDS = { MergeRequest = 'merge_requests', Issue = 'issues' }
+    local pending = {}
+    for _, n in ipairs(notes) do
+      local kind = KINDS[n.noteable_type]
+      if kind and n.noteable_iid then
+        pending[kind] = pending[kind] or {}
+        pending[kind][n.noteable_iid] = true
+      end
+    end
+    local waits = {}
+    for kind, iids in pairs(pending) do
+      local list = vim.tbl_keys(iids)
+      for i = 1, #list, 50 do
+        local qs = { 'state=all', 'per_page=100' }
+        for j = i, math.min(i + 49, #list) do
+          table.insert(qs, 'iids%5B%5D=' .. list[j])
+        end
+        table.insert(waits, { kind = kind, wait = C.api_async(('projects/%s/%s?%s'):format(encode(project), kind, table.concat(qs, '&'))) })
+      end
+    end
+    local titles = {}
+    for _, w in ipairs(waits) do
+      for _, t in ipairs(w.wait() or {}) do
+        titles[w.kind .. t.iid] = t.title
+      end
+    end
+    -- the search matches words, so `@NAME` must also be in the text (not `@NAMEsuffix`)
+    local tag = '@' .. vim.pesc(f.mentions) .. '%f[^%w_.-]'
+    for _, n in ipairs(notes) do
+      if not n.system and ((n.body or '') .. ' '):find(tag) then
+        table.insert(events, {
+          id = 'n' .. n.id,
+          created_at = n.created_at,
+          project_id = n.project_id,
+          author = n.author,
+          author_username = n.author and n.author.username,
+          action_name = 'commented on',
+          target_type = n.noteable_type,
+          target_iid = n.noteable_iid,
+          target_title = titles[(KINDS[n.noteable_type] or '') .. tostring(n.noteable_iid)] or '',
+          note = n,
+        })
+      end
+    end
+  end
+  return events
+end
+
 local function search(opts, rest)
   local query = vim.trim(table.concat(rest, ' '))
   local fzf = (opts.f or opts.format) == 'fzf'
@@ -674,9 +748,9 @@ local function search(opts, rest)
     end
     fail(invalid)
   end
-  local waits = f.has_mr and {
+  local waits = (f.mentions or f.has_mr) and {
     function()
-      return mr_events(f)
+      return (f.mentions and mention_events or mr_events)(f)
     end,
   } or vim.tbl_map(C.api_async, paths)
   local seen, events = {}, {}
@@ -726,7 +800,7 @@ local function search(opts, rest)
     return
   end
   if query == '' then
-    hint 'Your activity. Filter with user:NAME project:PATH type:push|merge|issue|comment -type:push mr:N since:7d words…  tab: complete · alt-t: by MR'
+    hint 'Your activity. Filter with user:NAME project:PATH type:push|merge|issue|comment -type:push mr:N mentions:@me since:7d words…  tab: complete · alt-t: by MR'
   end
   if #found == 0 then
     hint 'No events match the query'

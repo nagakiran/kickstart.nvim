@@ -8,13 +8,15 @@
 -- `mr_source` (the name of the `mr` source, whose float alt-m opens: 'mr').
 --
 -- Keys: `enter` the event (or MR) in the browser · `alt-enter` insert its MR (`project!iid`) · `alt-m` the MR's details
--- · `alt-r` all the events on its MR · `alt-u` only this user's events · `alt-h` hide this user.
+-- · `alt-r` all the events on its MR · `alt-u` only this user's events · `alt-h` hide this user. The MR keys of the
+-- `mr` source work on the event's MR: `ctrl-d` diff · `alt-d` branch diff · `alt-v` Diffview · `ctrl-g` checkout
+-- (they use that source's `repo`).
 
 local backend = vim.fs.normalize(vim.fs.joinpath(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)), '..', 'backends', 'gitlab_activity.lua'))
 
 local function syntax()
   vim.cmd [[
-    syntax match gitlabActivityPrefix /\(^\|\s\)\zs-\?\(user\|project\|type\|action\|mr\|branch\|since\|before\|on\|sort\):/
+    syntax match gitlabActivityPrefix /\(^\|\s\)\zs-\?\(user\|project\|type\|action\|mr\|branch\|mentions\|since\|before\|on\|sort\):/
     syntax match gitlabActivityUser /@\w\+/
     syntax region gitlabActivityString start=/"/ end=/"/ oneline
     highlight default link gitlabActivityPrefix Identifier
@@ -45,6 +47,26 @@ local function narrow(query, prefixes, extra)
   end
   vim.list_extend(kept, extra)
   return table.concat(kept, ' ')
+end
+
+--- An action of the MR source (`mr_source`) run on the MR of the first item: the MR keys need no copy here, and
+--- use the MR source's options (its `repo`, the local clone).
+local function on_mr(mr_source, key, desc)
+  return {
+    desc = desc,
+    fn = function(items, ...)
+      local ref = items[1] and ref_of(items[1])
+      local source = require('liveq').sources[mr_source]
+      local action = source and source.actions and source.actions[key]
+      if not (ref and ref:find '!') then
+        vim.notify('Not an event on a merge request', vim.log.levels.WARN)
+      elseif not action then
+        vim.notify(('No %s action in the liveq source %s'):format(key, mr_source), vim.log.levels.WARN)
+      else
+        action.fn({ { id = ref, title = items[1].title, url = items[1].url } }, ...)
+      end
+    end,
+  }
 end
 
 return function(opts)
@@ -138,6 +160,10 @@ return function(opts)
           require('liveq').search(spec.name, query)
         end,
       },
+      ['ctrl-d'] = on_mr(mr_source, 'ctrl-d', 'diff'),
+      ['alt-d'] = on_mr(mr_source, 'alt-d', 'branch diff'),
+      ['alt-v'] = on_mr(mr_source, 'alt-v', 'diffview'),
+      ['ctrl-g'] = on_mr(mr_source, 'ctrl-g', 'checkout'),
       ['alt-u'] = {
         desc = 'only user',
         fn = function(items, _, q)
