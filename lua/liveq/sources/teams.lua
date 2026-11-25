@@ -164,6 +164,8 @@ end
 local STYLE = vim.env.LIVEQ_TEAMS_STYLE or vim.fs.joinpath(vim.env.HOME, 'rcfiles', '.claude', 'skills', 'teams-reply', 'style.md')
 local DRAFT_MODEL = vim.env.LIVEQ_TEAMS_DRAFT_MODEL or 'sonnet'
 local HISTORY = 20 -- messages of the chat Claude sees
+local DRAFT_IMAGES = 6 -- of their images, the newest Claude sees too
+local IMAGE_BYTES = 3.5 * 1024 * 1024 -- larger ones stay out: the API takes up to 5 MB of base64
 local MARK = '── '
 local ATTACHMENT = '^%s*!?%[[^%]]*%]%([/~][^)]*%)%s*$'
 
@@ -221,6 +223,63 @@ local function draft_prompt(title, history, points)
   }, '\n')
 end
 
+--- The media type of an image file from its first bytes (cached images have no extension); nil if not one the API
+--- takes.
+local function image_type(head)
+  if head:sub(1, 8) == '\137PNG\r\n\26\n' then
+    return 'image/png'
+  elseif head:sub(1, 3) == '\255\216\255' then
+    return 'image/jpeg'
+  elseif head:sub(1, 4) == 'GIF8' then
+    return 'image/gif'
+  elseif head:sub(1, 4) == 'RIFF' and head:sub(9, 12) == 'WEBP' then
+    return 'image/webp'
+  end
+end
+
+--- The chat's history with each `[image: FILE]` (show --plain --images) as `[image N]`, and the content blocks of the
+--- newest DRAFT_IMAGES of them for Claude's message: a label, then the image. The others read `[image]`.
+local function history_images(history)
+  local files = {}
+  for file in history:gmatch '%[image: ([^%]]+)%]' do
+    table.insert(files, file)
+  end
+  local blocks, numbers = {}, {}
+  for i = math.max(1, #files - DRAFT_IMAGES + 1), #files do
+    local f = io.open(files[i], 'rb')
+    local bytes = f and f:read '*a'
+    if f then
+      f:close()
+    end
+    local mime = bytes and #bytes <= IMAGE_BYTES and image_type(bytes)
+    if mime then
+      table.insert(blocks, { type = 'text', text = ('[image %d]'):format(#blocks / 2 + 1) })
+      table.insert(blocks, { type = 'image', source = { type = 'base64', media_type = mime, data = vim.base64.encode(bytes) } })
+      numbers[i] = #blocks / 2
+    end
+  end
+  local i = 0
+  history = history:gsub('%[image: [^%]]+%]', function()
+    i = i + 1
+    return numbers[i] and ('[image %d]'):format(numbers[i]) or '[image]'
+  end)
+  return history, blocks
+end
+
+--- Claude's reply text from `claude -p --output-format stream-json` (its `result` event); nil and why not.
+local function stream_result(output)
+  for _, line in ipairs(vim.split(output, '\n', { plain = true })) do
+    local ok, event = pcall(vim.json.decode, line)
+    if ok and type(event) == 'table' and event.type == 'result' then
+      if event.is_error then
+        return nil, tostring(event.result or event.subtype)
+      end
+      return event.result
+    end
+  end
+  return nil, 'no result from claude'
+end
+
 --- Parses Claude's `=== name` sections into { { name, text } }.
 local function parse_drafts(output)
   local list, current = {}, nil
@@ -262,18 +321,32 @@ local function draft(source, id, title, buf)
   end
   local points_text = vim.trim(table.concat(points, '\n'))
   vim.notify(('Drafting with Claude (%s)…'):format(DRAFT_MODEL), vim.log.levels.INFO, { title = 'Teams' })
-  run_async(source, { 'show', '--plain', '--chronological', '--count', tostring(HISTORY), '--', id }, function(history)
+  -- `--images`: the images pasted into the messages come as cached files, which Claude sees with the text
+  run_async(source, { 'show', '--plain', '--images', '--chronological', '--count', tostring(HISTORY), '--', id }, function(history)
+    local blocks
+    history, blocks = history_images(history)
     local prompt = draft_prompt(title, history, points_text)
+    -- the message as stream-json, so that the images go along as image blocks (Claude still gets no tools)
+    local message = { type = 'user', message = { role = 'user', content = vim.list_extend({ { type = 'text', text = prompt } }, blocks) } }
     local cmd = { 'claude', '-p', '--model', DRAFT_MODEL, '--tools', '', '--strict-mcp-config', '--no-session-persistence' }
+    vim.list_extend(cmd, { '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose' })
+    if #blocks > 0 then
+      vim.notify(
+        ('Drafting with Claude (%s, %d image%s)…'):format(DRAFT_MODEL, #blocks / 2, #blocks == 2 and '' or 's'),
+        vim.log.levels.INFO,
+        { title = 'Teams' }
+      )
+    end
     -- from a neutral directory, so that no project's CLAUDE.md comes along
-    vim.system(cmd, { stdin = prompt, text = true, cwd = vim.fn.stdpath 'cache', timeout = 120000 }, function(result)
+    vim.system(cmd, { stdin = vim.json.encode(message) .. '\n', text = true, cwd = vim.fn.stdpath 'cache', timeout = 120000 }, function(result)
       vim.schedule(function()
         if not vim.api.nvim_buf_is_valid(buf) then
           return
         end
-        local drafts = result.code == 0 and parse_drafts(result.stdout or '') or {}
+        local reply, failed = stream_result(result.stdout or '')
+        local drafts = result.code == 0 and reply and parse_drafts(reply) or {}
         if #drafts == 0 then
-          local why = vim.trim((result.stderr or '') .. ' ' .. (result.stdout or ''))
+          local why = vim.trim((failed or '') .. ' ' .. (result.stderr or '') .. ' ' .. (reply or ''))
           vim.notify('Claude gave no drafts: ' .. (why ~= '' and why:sub(1, 300) or ('exit ' .. result.code)), vim.log.levels.ERROR, { title = 'Teams' })
           return
         end

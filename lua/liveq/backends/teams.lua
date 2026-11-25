@@ -3,6 +3,9 @@
 --   nvim -l teams.lua search -f fzf -l LIMIT -- QUERY      chats from the on-disk cache, newest activity first
 --   nvim -l teams.lua show [--plain] [--chronological] [--count N] [--fresh] -- CHAT_ID   (--fresh skips the cache)
 --   nvim -l teams.lua show --images -- CHAT_ID             ...with the images pasted into messages drawn (see images)
+--   nvim -l teams.lua show --plain --images -- CHAT_ID     ...with each [image] as `[image: FILE.png]`, the cached file
+--                                                           (downloaded now, the newest LIVEQ_TEAMS_IMAGE_MAX), for
+--                                                           a reader that looks at them (the Claude drafts)
 --   nvim -l teams.lua images -f fzf -- CHAT_ID             the chat's images, a row each (`URL#WxH`), newest first
 --   nvim -l teams.lua image [--copy|--open] -- URL#WxH     one of them as large as the preview, or copied, or opened
 --   nvim -l teams.lua complete -f json [-c CURSOR] -- QUERY
@@ -1940,8 +1943,10 @@ local function show(opts, rest)
   local draw = opts.images and not plain
   -- the preview's [image] are links to the cached files (downloaded now, the newest IMAGE_MAX), unless drawn
   local links = not plain and os.getenv 'LIVEQ_TEAMS_IMAGE_LINKS' ~= '0'
+  -- plain with --images: each [image] names its cached file instead
+  local paths = plain and opts.images
   local drawn = 0 -- images with a caption, for the picker's real ones
-  if draw or links then
+  if draw or links or paths then
     local images = {}
     for _, m in ipairs(list) do
       for _, img in ipairs(m.type == 'message' and not m.deleted and m.images or {}) do
@@ -2183,6 +2188,16 @@ local function show(opts, rest)
         table.insert(lines, plain and ('**' .. m.subject .. '**') or ('\27[1m' .. m.subject .. '\27[0m'))
       end
       local text = describe_loops(m.text, loops, plain)
+      if paths then
+        local i = 0
+        text = text:gsub('%[image%]', function(word)
+          i = i + 1
+          local img = m.images and m.images[i]
+          -- as a .png, so that a reader going by the extension (Claude Code's Read) takes it for an image
+          local file = img and img.file and (link_file(img.file) or img.file)
+          return file and ('[image: ' .. file .. ']') or word
+        end)
+      end
       table.insert(lines, render_quotes((draw or links) and with_images(text, m, drawn) or text, plain))
       table.insert(lines, '')
     end
