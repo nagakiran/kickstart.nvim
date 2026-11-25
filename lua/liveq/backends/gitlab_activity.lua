@@ -12,7 +12,8 @@
 --   its users, unless user: narrows them: then the users' feeds are read, and their events in other projects dropped)
 --   type:push|merge|issue|comment|wiki|design|team (the tabs of the page; several: any of them)   -type:push (hide)
 --   action:approved|closed|commented|created|destroyed|expired|joined|left|merged|pushed|reopened|updated   -action:
---   mr:11096 (events on that MR: approvals, comments, ...)   branch:NAME (pushes to it)
+--   mr:11096 (events on that MR: opened, comments, approvals, pushes, merge; read from the MR itself, of everyone
+--   unless user: is given, in project: or the default project)   branch:NAME (pushes to it)
 --   since:7d|4h|today|yesterday|DATE   before:DATE   on:DATE|today|yesterday   sort:asc (oldest first)
 --   any other word must appear in the title, the comment, the commit title, the branch, the author or the project.
 --
@@ -328,6 +329,8 @@ local function action_of(e)
   end
   local icons = {
     approved = { '✓', '32' },
+    unapproved = { '✗', '33' },
+    ['pushed to'] = { '↑', '36' },
     accepted = { '⇢', '35' },
     merged = { '⇢', '35' },
     opened = { '●', '32' },
@@ -351,10 +354,12 @@ local function body_of(e)
   elseif e.push_data then
     return e.push_data.commit_title or ''
   end
-  return ''
+  return e._summary or ''
 end
 
 -- -- query --------------------------------------------------------------------------------------------------------
+
+local mr_events
 
 local function plan(query, limit)
   local f = { users = {}, not_users = {}, types = {}, not_types = {}, actions = {}, not_actions = {}, projects = {}, words = {}, mrs = {}, branches = {} }
@@ -485,6 +490,9 @@ local function matches(e, f)
   if f.not_users[author] then
     return false
   end
+  if f.has_mr and #f.users > 0 and not vim.tbl_contains(f.users, author) then
+    return false
+  end
   if #f.users > 0 and #f.projects > 0 and not vim.tbl_contains(f.projects, e._path) then
     return false
   end
@@ -584,6 +592,77 @@ local function row(id, disp, url, title, depth)
   out(('%s\t%s\t%s\t%s%s'):format(id, clean(disp), url, clean(title), depth and ('\t' .. depth) or ''))
 end
 
+-- what the system notes of an MR stand for in the activity feed; other system notes (assigned, review requested,
+-- description changed, ...) are not events of the feed, so they are left out
+local SYSTEM_ACTIONS = {
+  { '^approved this merge request', 'approved' },
+  { '^unapproved this merge request', 'unapproved' },
+  { '^merged', 'accepted' },
+  { '^closed', 'closed' },
+  { '^reopened', 'reopened' },
+  { '^added %d+ commit', 'pushed to' },
+}
+
+--- The events of the MRs of an `mr:` query, made from each MR and its notes: the feeds hold only a few hours of a busy
+--- project, and a user's feed only that user's events, so filtering them misses most of an MR's history.
+--- Ids are `n` + the note id (or `m` + the MR id for its opening), so they never clash with the ids of events.
+mr_events = function(f)
+  local projects = #f.projects > 0 and f.projects or { DEFAULT_PROJECT }
+  local jobs = {}
+  for _, project in ipairs(projects) do
+    for iid in pairs(f.mrs) do
+      local base = ('projects/%s/merge_requests/%d'):format(encode(project), iid)
+      table.insert(jobs, { mr = C.api_async(base), base = base })
+    end
+  end
+  local events = {}
+  for _, job in ipairs(jobs) do
+    local mr = job.mr()
+    if mr and mr.iid then
+      local function event(id, created_at, author, action, note)
+        return {
+          id = id,
+          created_at = created_at,
+          project_id = mr.project_id,
+          author = author,
+          author_username = author and author.username,
+          action_name = action,
+          target_type = 'MergeRequest',
+          target_iid = mr.iid,
+          target_title = mr.title,
+          note = note,
+        }
+      end
+      table.insert(events, event('m' .. mr.id, mr.created_at, mr.author, 'opened'))
+      for page = 1, MAX_REQUESTS do
+        local notes, err = C.api(('%s/notes?per_page=%d&page=%d&sort=asc'):format(job.base, PER_PAGE, page))
+        if not notes then
+          return nil, err
+        end
+        for _, n in ipairs(notes) do
+          if not n.system then
+            n.noteable_type, n.noteable_iid = 'MergeRequest', mr.iid
+            table.insert(events, event('n' .. n.id, n.created_at, n.author, 'commented on', n))
+          else
+            for _, rule in ipairs(SYSTEM_ACTIONS) do
+              if (n.body or ''):match(rule[1]) then
+                local e = event('n' .. n.id, n.created_at, n.author, rule[2])
+                e._summary = rule[2] == 'pushed to' and ((n.body or ''):match '^[^\n<]*') or nil
+                table.insert(events, e)
+                break
+              end
+            end
+          end
+        end
+        if #notes < PER_PAGE then
+          break
+        end
+      end
+    end
+  end
+  return events
+end
+
 local function search(opts, rest)
   local query = vim.trim(table.concat(rest, ' '))
   local fzf = (opts.f or opts.format) == 'fzf'
@@ -595,7 +674,11 @@ local function search(opts, rest)
     end
     fail(invalid)
   end
-  local waits = vim.tbl_map(C.api_async, paths)
+  local waits = f.has_mr and {
+    function()
+      return mr_events(f)
+    end,
+  } or vim.tbl_map(C.api_async, paths)
   local seen, events = {}, {}
   for _, wait in ipairs(waits) do
     local data, err = wait()
@@ -788,7 +871,7 @@ local function show(opts, rest)
     end
     return
   end
-  if not id:match '^%d+$' then
+  if not id:match '^[nm]?%d+$' then
     return -- e.g. a hint line of fzf
   end
   local e = load_event(id)
@@ -812,7 +895,7 @@ local function url(_, rest)
     if g then
       out(g.url)
     end
-  elseif id:match '^%d+$' then
+  elseif id:match '^[nm]?%d+$' then
     local e = load_event(id)
     if e then
       out(url_of(e))

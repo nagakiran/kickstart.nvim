@@ -12,11 +12,13 @@
 --   state:opened|merged|closed|locked|all (default opened)   author:@me   assignee:NAME   reviewer:NAME
 --   label:NAME  -label:NAME   milestone:NAME   project:PATH|all   branch:SOURCE   target:TARGET   draft:yes|no
 --   created:7d  updated:2w (or a date: updated:2026-10-01)    sort:updated|created|updated_asc|created_asc
+--   mr:11110 or !11110 (that MR, in any state unless state: is given)
 --   any other word searches the title and the description.
 --
 -- Environment: LIVEQ_GITLAB_HOST (default: glab's host), LIVEQ_GITLAB_PROJECT (default project: sd/security_director).
 
 local PREFIXES = {
+  { 'mr:', 'merge request number (any state), e.g. mr:11110' },
   { 'state:', 'opened, merged, closed, locked, all' },
   { 'author:', 'who opened the MR (@me for you)' },
   { 'assignee:', 'assigned user' },
@@ -57,14 +59,25 @@ local function plan(query, limit)
   local project = DEFAULT_PROJECT
   local labels, not_labels = {}, {}
   local state, people = 'opened', false
+  local iids, state_given = {}, false
   for _, term in ipairs(terms_of(query)) do
     local key, value = term:match '^(%-?[%w_]+):(.*)$'
+    if not key and term:match '^!%d+$' then
+      key, value = 'mr', term
+    end
     if key and value ~= '' then
       key = key:lower()
       if STATIC[key] and key ~= 'created' and key ~= 'updated' and not vim.tbl_contains(STATIC[key], value) then
         return nil, nil, ('%s: must be one of %s'):format(key, table.concat(STATIC[key], ', '))
       elseif key == 'state' then
-        state = value
+        state, state_given = value, true
+      elseif key == 'mr' or key == 'iid' then
+        for n in value:gmatch '%d+' do
+          table.insert(iids, n)
+        end
+        if #iids == 0 then
+          return nil, nil, 'mr: takes the number of a merge request (mr:11110)'
+        end
       elseif key == 'author' then
         params.author_username, people = user(value), true
       elseif key == 'assignee' then
@@ -99,6 +112,9 @@ local function plan(query, limit)
       table.insert(words, term)
     end
   end
+  if #iids > 0 and not state_given then
+    state = 'all' -- looking up a number: show it whether open, merged or closed
+  end
   if state ~= 'all' then
     params.state = state
   end
@@ -127,10 +143,13 @@ local function plan(query, limit)
     for k, v in pairs(vim.tbl_extend('force', params, extra or {})) do
       table.insert(query_string, encode(k) .. '=' .. encode(v))
     end
+    for _, n in ipairs(iids) do
+      table.insert(query_string, 'iids%5B%5D=' .. n)
+    end
     table.sort(query_string)
     return base .. '?' .. table.concat(query_string, '&')
   end
-  if project == 'all' and not people and not params.search then
+  if project == 'all' and not people and not params.search and #iids == 0 then
     -- everything on the instance is too much: the MRs you authored or review
     local username = me() or ''
     return { path { author_username = username }, path { reviewer_username = username } }, project

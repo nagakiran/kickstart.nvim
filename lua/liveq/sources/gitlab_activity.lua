@@ -31,7 +31,7 @@ end
 
 --- The author of an event, the first word of its title; nil for a group of the tree.
 local function author_of(item)
-  return item.id:match '^%d+$' and (item.title or ''):match '^(%S+)' or nil
+  return item.id:match '^[nm]?%d+$' and (item.title or ''):match '^(%S+)' or nil
 end
 
 --- QUERY without the terms of the given prefixes, then EXTRA.
@@ -74,7 +74,7 @@ return function(opts)
     tree = true,
 
     -- an event, or a group of the tree (its MR, issue or branch)
-    id_pattern = { '^%d+$', '^g:%S+$' },
+    id_pattern = { '^[nm]?%d+$', '^g:%S+$' },
 
     filetype = 'gitlabactivity',
     extension = 'gla',
