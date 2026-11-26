@@ -1520,14 +1520,22 @@ local function pad(s, width)
   return s .. string.rep(' ', width - w)
 end
 
+--- When the cache was last updated: its clock time (with the day when not today) and how long ago.
 local function age(at)
-  local secs = os.time() - (at or 0)
+  at = at or 0
+  local secs = os.time() - at
+  local clock = os.date('%Y-%m-%d', at) == os.date '%Y-%m-%d' and os.date('%H:%M', at) or os.date('%b %d %H:%M', at)
+  local ago
   if secs < 90 then
-    return 'just now'
+    ago = 'just now'
   elseif secs < 3600 then
-    return math.floor(secs / 60) .. 'm old'
+    ago = math.floor(secs / 60) .. 'm ago'
+  elseif secs < 86400 then
+    ago = math.floor(secs / 3600) .. 'h ago'
+  else
+    ago = math.floor(secs / 86400) .. 'd ago'
   end
-  return math.floor(secs / 3600) .. 'h old'
+  return ('updated %s, %s'):format(clock, ago)
 end
 
 local function search(opts, rest)
@@ -1593,8 +1601,16 @@ local function search(opts, rest)
         data.refreshing and ', refreshing' or ''
       )
     )
-  elseif #found == 0 then
-    out '\t\27[33mNo chats match\27[0m\t\t'
+  else
+    -- with a query too, a line on top says how fresh the cache searched is
+    out(
+      ('\t\27[%sm%s\27[0m\27[2m  (cache %s%s)\27[0m\t\t'):format(
+        #found == 0 and '33' or '2',
+        #found == 0 and 'No chats match' or (#found .. ' of ' .. #data.chats .. ' chats match'),
+        age(data.at),
+        data.refreshing and ', refreshing' or ''
+      )
+    )
   end
   local beyond = 0
   for chat_id in pairs(remote or {}) do
