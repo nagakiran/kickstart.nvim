@@ -211,5 +211,26 @@ return {
         detached = vim.fn.has 'win32' == 0,
       },
     }
+
+    -- Attach to a headless dlv already running a service under mirrord
+    -- (security_director: .localdev/mirrord-dlv.sh <svc>; listens on 127.0.0.1:2345).
+    -- Bazel builds record source paths relative to the workspace root (iam/main.go), so
+    -- map "<worktree>/" ↔ "" or breakpoints set from nvim never bind.
+    dap.adapters['delve-remote'] = function(callback, config)
+      callback { type = 'server', host = '127.0.0.1', port = config.port or 2345 }
+    end
+    table.insert(dap.configurations.go, {
+      type = 'delve-remote',
+      request = 'attach',
+      mode = 'remote',
+      name = 'Attach: dlv :2345 (mirrord)',
+      port = function()
+        return tonumber(os.getenv 'DLV_PORT') or 2345
+      end,
+      substitutePath = function()
+        local root = vim.fs.root(0, { 'WORKSPACE', 'MODULE.bazel' }) or vim.fn.getcwd()
+        return { { from = root .. '/', to = '' } }
+      end,
+    })
   end,
 }

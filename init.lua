@@ -581,6 +581,25 @@ require('lazy').setup({
     'morhetz/gruvbox',
     priority = 1000,
     init = function()
+      -- gruvbox draws the diff groups as `reverse` (its colour as background, the text in the editor background),
+      -- so on a changed line every syntax-coloured token turns into a coloured box, which reads like intra-line
+      -- diff marks. Use tinted backgrounds without a foreground instead, so syntax colours show through, with
+      -- DiffText a brighter tint of DiffChange. Registered before :colorscheme so it also runs on later reloads,
+      -- and before Diffview's own ColorScheme handler, which derives its inline highlights from these.
+      vim.api.nvim_create_autocmd('ColorScheme', {
+        pattern = 'gruvbox',
+        group = vim.api.nvim_create_augroup('gruvbox_diff', { clear = true }),
+        callback = function()
+          local dark = vim.o.background == 'dark'
+          local hl = function(name, dark_bg, light_bg)
+            vim.api.nvim_set_hl(0, name, { bg = dark and dark_bg or light_bg })
+          end
+          hl('DiffAdd', '#34381b', '#e3e8c4')
+          hl('DiffDelete', '#442422', '#f5d3cc')
+          hl('DiffChange', '#2e3a36', '#dde6e0')
+          hl('DiffText', '#5e4a1c', '#f2dfa5')
+        end,
+      })
       -- vim.opt.background = 'dark' -- or 'light' if you prefer
       vim.cmd.colorscheme 'gruvbox'
     end,

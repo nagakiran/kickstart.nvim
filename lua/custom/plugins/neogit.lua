@@ -5,7 +5,7 @@ return {
     'nvim-lua/plenary.nvim', -- required
 
     -- Only one of these is needed.
-    'sindrets/diffview.nvim', -- optional
+    'dlyongemallo/diffview-plus.nvim', -- optional (see diffview.lua)
     'esmuellert/codediff.nvim', -- optional
 
     -- For a custom log pager

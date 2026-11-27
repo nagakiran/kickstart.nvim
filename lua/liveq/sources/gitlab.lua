@@ -69,7 +69,7 @@ local function branch_diff(repo, id, context)
       vim.bo[buf].modifiable = false
       vim.bo[buf].filetype = 'diff'
       pcall(vim.api.nvim_buf_set_name, buf, ('mr://%s!%s %s...%s'):format(project, iid, mr.target_branch, mr.source_branch))
-      vim.notify(('%s...%s  ·  ;dF file in vimdiff  ·  ;dL feature file  ·  ;dJ Diffview'):format(base, feat))
+      vim.notify(('%s...%s  ·  ;dF vimdiff  ·  ;dL/;dB feature/base file  ·  ;dJ Diffview  ·  ;dw intra-line'):format(base, feat))
     end)
   end)
 end
