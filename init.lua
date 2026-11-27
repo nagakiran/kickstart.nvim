@@ -291,6 +291,10 @@ require('liveq').setup {
     mail = require 'liveq.sources.notmuch' {
       title = 'Mail (HPE)',
       config = '~/rcfiles/.notmuch-hpe',
+      sync = { '~/rcfiles/bin/mail/hpesync.sh' }, -- alt-u; a LaunchAgent also runs it every 15 minutes
+      outlook = { '~/.venvs/mail/bin/python', '~/rcfiles/bin/mail/outlook-link.py' }, -- alt-o: the mail in Outlook on the web (needs Graph Mail.Read)
+      outlook_app = true, -- alt-o opens the mail in Outlook for Mac when it is installed
+      outlook_pwa = 'eoficlgicibekocmfdomjbfnjmehnhcd', -- else in Chrome's Outlook (PWA) when installed, else the browser
       primary = true,
       commands = { search = 'MailSearch', saved = 'MailSaved', resume = 'MailResume', query = 'MailQuery', show = 'MailShow' },
       keymaps = { search = '<leader>ms', resume = '<leader>mr', saved = '<leader>mv', query = '<leader>mq', show = '<leader>mi' },

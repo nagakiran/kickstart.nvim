@@ -3,7 +3,12 @@
 --   require('liveq.sources.notmuch') { title = 'Mail (HPE)', config = '~/rcfiles/.notmuch-hpe', ... }
 --
 -- Options: `title`, `prompt`, `primary`, `config` (the NOTMUCH_CONFIG of the mailbox; notmuch's default when nil), `url` (a
--- template for a link to a message, `%s` being its message id; e.g. Gmail's), `commands` and `keymaps`.
+-- template for a link to a message, `%s` being its message id; e.g. Gmail's), `sync` (the command that fetches new mail
+-- and indexes it, run by alt-u; it should touch `<database>/.last-sync` when done, the time the picker shows), `outlook`
+-- (a command that prints a mail's Outlook link given its Message-ID, run by alt-o, e.g. ~/rcfiles/bin/mail/outlook-link.py),
+-- `outlook_app` (alt-o opens the mail in Outlook for Mac, falling back to the web), `outlook_pwa` (the Chrome app id of
+-- the Outlook PWA, whose window alt-o opens the web link in when it is installed),
+-- `commands` and `keymaps`.
 
 local backend = vim.fs.normalize(vim.fs.joinpath(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)), '..', 'backends', 'notmuch.lua'))
 
@@ -37,6 +42,110 @@ return function(opts)
       fn = function(items, source)
         for _, item in ipairs(items) do
           require('liveq.show').open(source, item.id)
+        end
+      end,
+    }
+  end
+
+  -- alt-u: fetches new mail in the background (a sync takes from seconds to minutes), then searches again
+  local sync
+  if opts.sync and vim.fn.executable(vim.fn.expand(opts.sync[1])) == 1 then
+    sync = {
+      desc = 'sync',
+      fn = function(_, source)
+        local title = opts.title or 'Mail'
+        vim.notify('Syncing mail…', vim.log.levels.INFO, { title = title })
+        local cmd = vim.tbl_map(vim.fn.expand, opts.sync)
+        local ok, err = pcall(vim.system, cmd, { text = true, timeout = 900000 }, function(result)
+          vim.schedule(function()
+            if result.code ~= 0 then
+              local msg = vim.trim((result.stderr or '') .. (result.stdout or ''))
+              local lines = vim.split(msg, '\n')
+              msg = table.concat(vim.list_slice(lines, math.max(1, #lines - 4)), '\n') -- the end says why
+              vim.notify(msg ~= '' and msg or ('sync failed (exit ' .. result.code .. ')'), vim.log.levels.ERROR, { title = title })
+              return
+            end
+            vim.notify('Mail synced', vim.log.levels.INFO, { title = title })
+            local has_fzf, fzf = pcall(require, 'fzf-lua')
+            require('liveq').search(source.name, has_fzf and fzf.get_last_query() or '')
+          end)
+        end)
+        if not ok then
+          vim.notify(tostring(err), vim.log.levels.ERROR, { title = title })
+        end
+      end,
+    }
+  end
+
+  -- Opens a mail's Outlook links (`outlook --app` prints the desktop app's, then the web's): in Outlook for Mac when
+  -- `outlook_app` is set and the app takes the link (a universal link: `open` would give it to the browser), else in
+  -- the Outlook PWA's own window when Chrome has it installed (`outlook_pwa`, its app id; a link handed to Chrome from
+  -- outside lands in a tab even with "Open supported links" on), else in the browser.
+  local universal_link = vim.fs.joinpath(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)), '..', 'universal_link.js')
+  local function open_web(url)
+    local id = opts.outlook_pwa
+    local installed = id
+      and vim.fn.has 'mac' == 1
+      and #vim.fn.glob(vim.fs.joinpath(vim.env.HOME, 'Library/Application Support/Google/Chrome/*/Web Applications/Manifest Resources', id), false, true) > 0
+    if installed then
+      vim.system { 'open', '-na', 'Google Chrome', '--args', '--app-id=' .. id, '--app-launch-url-for-shortcuts-menu-item=' .. url }
+    else
+      vim.ui.open(url)
+    end
+  end
+  local function open_outlook(app_url, web_url)
+    if not app_url then
+      return open_web(web_url)
+    end
+    vim.system({ 'osascript', '-l', 'JavaScript', universal_link, app_url }, { text = true, timeout = 15000 }, function(result)
+      if vim.trim(result.stdout or '') ~= 'ok' then
+        vim.schedule(function()
+          open_web(web_url)
+        end)
+      end
+    end)
+  end
+  local use_app = opts.outlook_app and vim.fn.has 'mac' == 1 and vim.uv.fs_stat '/Applications/Microsoft Outlook.app' ~= nil
+
+  -- alt-o with `outlook`: the mail in Outlook (the app, or on the web), looked up on the server by its Message-ID; a thread opens at
+  -- its newest message
+  if opts.outlook and vim.fn.executable(vim.fn.expand(opts.outlook[1])) == 1 then
+    web = {
+      desc = 'outlook',
+      fn = function(items)
+        local item = items[1]
+        if not item then
+          return
+        end
+        local title = opts.title or 'Mail'
+        local id = item.id
+        if not id:match '^id:' then
+          local cmd = { 'notmuch', 'search', '--output=messages', '--sort=newest-first', '--limit=1', id }
+          local env = opts.config and { NOTMUCH_CONFIG = vim.fs.normalize(opts.config) } or nil
+          id = vim.trim(vim.system(cmd, { text = true, env = env }):wait(10000).stdout or '')
+        end
+        if id == '' then
+          vim.notify('No message in ' .. item.id, vim.log.levels.WARN, { title = title })
+          return
+        end
+        local cmd = vim.tbl_map(vim.fn.expand, opts.outlook)
+        if use_app then
+          table.insert(cmd, '--app')
+        end
+        table.insert(cmd, id)
+        local ok, err = pcall(vim.system, cmd, { text = true, timeout = 60000 }, function(result)
+          vim.schedule(function()
+            local urls = vim.split(vim.trim(result.stdout or ''), '\n')
+            if result.code ~= 0 or not urls[#urls]:match '^https?://' then
+              local msg = vim.trim((result.stderr or '') .. (result.stdout or ''))
+              vim.notify(msg ~= '' and msg or ('lookup failed (exit ' .. result.code .. ')'), vim.log.levels.ERROR, { title = title })
+              return
+            end
+            open_outlook(#urls > 1 and urls[1] or nil, urls[#urls])
+          end)
+        end)
+        if not ok then
+          vim.notify(tostring(err), vim.log.levels.ERROR, { title = title })
         end
       end,
     }
@@ -93,6 +202,7 @@ return function(opts)
         end,
       },
       ['alt-o'] = web,
+      ['alt-u'] = sync,
       -- reply with Claude Code's mail-reply skill (~/rcfiles/.claude/skills/mail-reply): an interactive `claude` in a
       -- tmux window, in the main codebase ($LIVEQ_MAIL_REPLY_DIR, default ~/stormbreaker/security_director), which reads
       -- the thread and asks there for the points to make; it drafts and, on approval, saves the reply as an Outlook draft

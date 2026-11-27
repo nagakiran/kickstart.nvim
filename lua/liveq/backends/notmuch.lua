@@ -457,6 +457,27 @@ search_tree = function(query, threads)
   end
 end
 
+--- When the mailbox was last synced, for the picker's first row: the time of `<database>/.last-sync`, which the sync
+--- command (e.g. ~/rcfiles/bin/mail/hpesync.sh) touches when it finishes; without one, the time of the newest mail.
+local function freshness()
+  local function when(at)
+    local secs = os.time() - at
+    local clock = os.date('%Y-%m-%d', at) == os.date '%Y-%m-%d' and os.date('%H:%M', at) or os.date('%b %d %H:%M', at)
+    local ago = secs < 90 and 'just now'
+      or secs < 3600 and math.floor(secs / 60) .. 'm ago'
+      or secs < 86400 and math.floor(secs / 3600) .. 'h ago'
+      or math.floor(secs / 86400) .. 'd ago'
+    return clock .. ', ' .. ago
+  end
+  local db = vim.trim(notmuch { 'config', 'get', 'database.path' } or '')
+  local stat = db ~= '' and vim.uv.fs_stat(vim.fs.joinpath(vim.fn.expand(db), '.last-sync'))
+  if stat then
+    return 'synced ' .. when(stat.mtime.sec)
+  end
+  local newest = json { 'search', '--format=json', '--sort=newest-first', '--limit=1', '*' }
+  return newest and newest[1] and newest[1].timestamp and ('newest mail ' .. when(newest[1].timestamp)) or nil
+end
+
 local function search(opts, rest)
   local query = vim.trim(table.concat(rest, ' '))
   local fzf = opts.f == 'fzf' or opts.format == 'fzf'
@@ -478,8 +499,15 @@ local function search(opts, rest)
     end
     fail(err)
   end
-  if #threads == 0 and fzf then
-    out '\t\27[2mNo threads match the query\27[0m\t\t'
+  if fzf then
+    -- a line on top says how fresh the mailbox is (a sync, e.g. alt-u in the picker, updates it)
+    local fresh = freshness()
+    out(
+      ('\t\27[2m%s%s\27[0m\t\t'):format(
+        #threads == 0 and 'No threads match the query' or (#threads .. ' thread' .. (#threads == 1 and '' or 's')),
+        fresh and ('  (' .. fresh .. ')') or ''
+      )
+    )
   end
   if opts.tree and fzf and #threads > 0 then
     return search_tree(query, threads)
