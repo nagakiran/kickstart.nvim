@@ -155,16 +155,25 @@ local function write_file(path, text)
   os.rename(tmp, path)
 end
 
+local DB_VERSION = 2 -- 2: why a build stopped (aborted_by, cancelled, stopped)
+
 local function load_db()
   local db = decode(read_file(DB_FILE)) or {}
   db.builds = db.builds or {}
   db.full = db.full or {}
+  if (db.v or 0) < DB_VERSION then
+    db.full, db.tried, db.v = {}, 0, DB_VERSION -- refetch every build for the fields a newer version keeps
+  end
   return db
 end
 
-local FIELDS = 'number,result,building,timestamp,duration,estimatedDuration,actions[causes[upstreamProject,upstreamBuild,userId],parameters[name,value]]'
+local FIELDS =
+  'number,result,building,timestamp,duration,estimatedDuration,actions[causes[_class,upstreamProject,upstreamBuild,userId,shortDescription],parameters[name,value]]'
 
---- A build of the API as the cache keeps it: { job, n, status, ts, dur, est, branch, user, up = 'JOB#N', params }.
+--- A build of the API as the cache keeps it: { job, n, status, ts, dur, est, branch, user, up = 'JOB#N', params,
+--- aborted_by, cancelled, stopped }. Why it stopped comes from its InterruptedBuildAction: aborted_by is the user who
+--- pressed abort on it (UserInterruption), cancelled that its calling pipeline was cancelled (an abort above it, or a
+--- fail-fast of a sibling), stopped any other reason (a timeout). A DownstreamFailureCause only repeats a child's fail.
 local function compact(job, b)
   local e = {
     job = job,
@@ -183,6 +192,14 @@ local function compact(job, b)
       end
       if c.userId and not e.user then
         e.user = c.userId
+      end
+      local cls = c._class or ''
+      if cls:find 'UserInterruption$' then
+        e.aborted_by = e.aborted_by or (c.shortDescription or ''):match '^Aborted by (.+)$' or '?'
+      elseif cls:find 'BuildTriggerCancelledCause$' then
+        e.cancelled = true
+      elseif cls:find 'CauseOfInterruption' or cls:find 'ExceededTimeout' then
+        e.stopped = e.stopped or c.shortDescription
       end
     end
     for _, p in ipairs(a.parameters or {}) do
@@ -416,6 +433,33 @@ end
 
 local function short(job)
   return SHORT[job] or job
+end
+
+--- Who or what stopped the build: (text, user) — the user who aborted it or the build above it that cancelled it,
+--- else for a fail-fast the sibling whose failure cancelled it (user nil). nil for a build nothing stopped.
+local function stopper(g, b)
+  if b.aborted_by then
+    return b.aborted_by, b.aborted_by
+  end
+  if b.cancelled then
+    local from, p = b, b.up and g.by_id[b.up]
+    while p do
+      if p.aborted_by then
+        return ('%s (on %s #%d)'):format(p.aborted_by, short(p.job), p.n), p.aborted_by
+      end
+      if not p.cancelled then
+        for _, k in ipairs(g.kids[p.id] or {}) do
+          if k ~= from and (k.status == 'FAILURE' or k.status == 'UNSTABLE') then
+            return ('%s #%d failed, %s #%d cancelled the rest'):format(short(k.job), k.n, short(p.job), p.n)
+          end
+        end
+        return ('%s #%d cancelled it (%s)'):format(short(p.job), p.n, p.stopped or p.status)
+      end
+      from, p = p, p.up and g.by_id[p.up]
+    end
+    return 'its calling pipeline was cancelled'
+  end
+  return b.stopped
 end
 
 local function url_of(b)
@@ -680,6 +724,11 @@ local function row(g, b, opts)
   local dim = opts.dim
   local job = dim and color('2', pad(short(b.job), job_w)) or color('1', pad(short(b.job), job_w))
   local branch = (depth and depth > 0) and '' or (b.branch or '')
+  local _, aborter = stopper(g, b)
+  local tail = depth and '' or chain(g, b)
+  if aborter then
+    tail = tail .. (tail ~= '' and '  ' or '') .. color('31', '⊘ ' .. aborter)
+  end
   local display = ('%s %s%s %s %s %s %s %s %s'):format(
     icon(b.status),
     depth and '\31' or '',
@@ -689,7 +738,7 @@ local function row(g, b, opts)
     color('2', pad(started(b.ts), W.started)),
     lpad(took(b), W.took),
     color('35', pad((depth and depth > 0) and '' or (user_of(g, b) or ''), W.user)),
-    depth and '' or chain(g, b)
+    tail
   )
   if dim then
     display = display:gsub('\27%[0m', '\27[0m\27[2m')
@@ -869,6 +918,10 @@ local function show(opts, rest)
     up = up.up and g.by_id[up.up]
   end
   field('by', (user_of(g, b) or '?') .. (#via > 0 and ('  (via ' .. table.concat(via, ' → ') .. ')') or ''))
+  local why, aborter = stopper(g, b)
+  if why then
+    field(aborter and 'aborted' or 'stopped', aborter and ('by ' .. why) or why)
+  end
   local params = {}
   for k, v in pairs(b.params or root.params or {}) do
     if not tostring(v):match '^https?://' then
@@ -886,7 +939,7 @@ local function show(opts, rest)
       add '```'
     end
     local function line(x, depth)
-      local mark = x.id == b.id and color('1;33', ' ◀') or ''
+      local mark = (x.aborted_by and color('31', '  ⊘ ' .. x.aborted_by) or '') .. (x.id == b.id and color('1;33', ' ◀') or '')
       add(
         ('%s%s %s #%d  %s  %s%s'):format(
           ('  '):rep(depth),
