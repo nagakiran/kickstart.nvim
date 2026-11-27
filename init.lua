@@ -294,6 +294,7 @@ require('liveq').setup {
       sync = { '~/rcfiles/bin/mail/hpesync.sh' }, -- alt-u; a LaunchAgent also runs it every 15 minutes
       outlook = { '~/.venvs/mail/bin/python', '~/rcfiles/bin/mail/outlook-link.py' }, -- alt-o: the mail in Outlook on the web (needs Graph Mail.Read)
       outlook_app = true, -- alt-o opens the mail in Outlook for Mac when it is installed
+      outlook_mail = { '~/.venvs/mail/bin/python', '~/rcfiles/bin/mail/outlook-mail.py' }, -- alt-m move, alt-a archive, ^x tag unread/flagged: on the server at once (Graph Mail.ReadWrite)
       outlook_pwa = 'eoficlgicibekocmfdomjbfnjmehnhcd', -- else in Chrome's Outlook (PWA) when installed, else the browser
       primary = true,
       commands = { search = 'MailSearch', saved = 'MailSaved', resume = 'MailResume', query = 'MailQuery', show = 'MailShow' },

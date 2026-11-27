@@ -6,7 +6,9 @@
 -- template for a link to a message, `%s` being its message id; e.g. Gmail's), `sync` (the command that fetches new mail
 -- and indexes it, run by alt-u; it should touch `<database>/.last-sync` when done, the time the picker shows), `outlook`
 -- (a command that prints a mail's Outlook link given its Message-ID, run by alt-o, e.g. ~/rcfiles/bin/mail/outlook-link.py),
--- `outlook_app` (alt-o opens the mail in Outlook for Mac, falling back to the web), `outlook_pwa` (the Chrome app id of
+-- `outlook_app` (alt-o opens the mail in Outlook for Mac, falling back to the web), `outlook_mail` (a command that
+-- changes mails on the server: alt-m moves to a folder, alt-a archives, ^x tag sends unread/flagged; e.g.
+-- ~/rcfiles/bin/mail/outlook-mail.py), `outlook_pwa` (the Chrome app id of
 -- the Outlook PWA, whose window alt-o opens the web link in when it is installed),
 -- `commands` and `keymaps`.
 
@@ -151,6 +153,101 @@ return function(opts)
     }
   end
 
+  -- `outlook_mail` (e.g. ~/rcfiles/bin/mail/outlook-mail.py): changes on the Exchange server through Graph, at once
+  -- (alt-m moves to a folder, alt-a archives, ^x tag sends unread/flagged too); the maildir follows at the next sync
+  local outlook_mail = opts.outlook_mail and vim.fn.executable(vim.fn.expand(opts.outlook_mail[1])) == 1 and vim.tbl_map(vim.fn.expand, opts.outlook_mail)
+  local title = opts.title or 'Mail'
+
+  --- The Message-IDs of the picked items: every message of a thread, or the message itself.
+  local function messages_of(items)
+    local ids, threads = {}, {}
+    for _, item in ipairs(items) do
+      if item.id:match '^id:' then
+        table.insert(ids, item.id)
+      else
+        table.insert(threads, item.id)
+      end
+    end
+    if #threads > 0 then
+      local cmd = vim.list_extend({ 'notmuch', 'search', '--output=messages' }, { table.concat(threads, ' or ') })
+      local env = opts.config and { NOTMUCH_CONFIG = vim.fs.normalize(opts.config) } or nil
+      local out = vim.system(cmd, { text = true, env = env }):wait(15000).stdout or ''
+      vim.list_extend(ids, vim.split(vim.trim(out), '\n', { trimempty = true }))
+    end
+    return ids
+  end
+
+  --- Runs outlook-mail.py ARGS in the background and reports its last line (or the error).
+  local function run_outlook_mail(args, after)
+    local ok, err = pcall(vim.system, vim.list_extend(vim.deepcopy(outlook_mail), args), { text = true, timeout = 300000 }, function(result)
+      vim.schedule(function()
+        local msg = vim.trim((result.stdout or '') .. '\n' .. (result.stderr or ''))
+        if result.code ~= 0 then
+          vim.notify(msg ~= '' and msg or ('failed (exit ' .. result.code .. ')'), vim.log.levels.ERROR, { title = title })
+        else
+          vim.notify(msg .. (after or ''), vim.log.levels.INFO, { title = title })
+        end
+      end)
+    end)
+    if not ok then
+      vim.notify(tostring(err), vim.log.levels.ERROR, { title = title })
+    end
+  end
+
+  local function move_to(items, folder)
+    local ids = messages_of(items)
+    if #ids == 0 then
+      return
+    end
+    vim.notify(('Moving %d message%s to %s…'):format(#ids, #ids == 1 and '' or 's', folder), vim.log.levels.INFO, { title = title })
+    run_outlook_mail(vim.list_extend({ 'move', folder }, ids), ' (the local copy follows at the next sync, alt-u)')
+  end
+
+  local move, archive
+  if outlook_mail then
+    move = {
+      desc = 'move',
+      fn = function(items)
+        if #items == 0 then
+          return
+        end
+        -- the folder list is cached by the script for hours, so this is quick after the first time
+        local result = vim.system(vim.list_extend(vim.deepcopy(outlook_mail), { 'folders' }), { text = true }):wait(60000)
+        if result.code ~= 0 then
+          vim.notify(vim.trim(result.stderr or 'no folders'), vim.log.levels.ERROR, { title = title })
+          return
+        end
+        local paths = vim.tbl_map(function(line)
+          return (line:match '^([^\t]+)')
+        end, vim.split(vim.trim(result.stdout), '\n', { trimempty = true }))
+        vim.ui.select(paths, { prompt = 'Move to folder' }, function(folder)
+          if folder then
+            move_to(items, folder)
+          end
+        end)
+      end,
+    }
+    archive = {
+      desc = 'archive',
+      fn = function(items)
+        move_to(items, 'archive')
+      end,
+    }
+  end
+
+  --- The server flags that tag changes like "+flagged -unread" imply, as outlook-mail.py set options.
+  local function flag_options(changes)
+    local flags = {}
+    for sign, tag in changes:gmatch '([+-])(%S+)' do
+      if tag == 'unread' then
+        table.insert(flags, sign == '+' and '--unread' or '--read')
+      elseif tag == 'flagged' then
+        table.insert(flags, sign == '+' and '--flag' or '--unflag')
+      end
+    end
+    return flags
+  end
+
   local spec = {
     title = opts.title or 'Mail',
     prompt = opts.prompt or 'mail> ',
@@ -203,6 +300,8 @@ return function(opts)
       },
       ['alt-o'] = web,
       ['alt-u'] = sync,
+      ['alt-m'] = move,
+      ['alt-a'] = archive,
       -- reply with Claude Code's mail-reply skill (~/rcfiles/.claude/skills/mail-reply): an interactive `claude` in a
       -- tmux window, in the main codebase ($LIVEQ_MAIL_REPLY_DIR, default ~/stormbreaker/security_director), which reads
       -- the thread and asks there for the points to make; it drafts and, on approval, saves the reply as an Outlook draft
@@ -244,6 +343,11 @@ return function(opts)
               )
               if require('liveq.util').run(source, args) then
                 vim.notify(('Tagged %d thread(s): %s'):format(#items, changes))
+                -- unread/flagged are Outlook's read and flag state too: sent now, not at the next sync
+                local flags = flag_options(changes)
+                if outlook_mail and #flags > 0 then
+                  run_outlook_mail(vim.list_extend(vim.list_extend({ 'set' }, flags), messages_of(items)))
+                end
               end
             end
           end)
